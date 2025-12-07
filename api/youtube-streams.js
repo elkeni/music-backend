@@ -30,7 +30,7 @@ async function handler(req, res) {
 
     const data = await r.json();
     
-    // Saavn suele devolver { data: [songObj] }
+    // Saavn suele devolver { data: [songObj] } o a veces directo el objeto
     const songData = data.data?.[0] || data[0] || data.data || data;
 
     if (!songData) {
@@ -40,10 +40,10 @@ async function handler(req, res) {
     let streams = [];
     const downloadLinks = songData.downloadUrl || [];
 
-    // Lógica robusta: soporta tanto .url como .link
+    // CORRECCIÓN: Soportamos tanto .url como .link para estar seguros
     if (Array.isArray(downloadLinks)) {
         streams = downloadLinks.map(linkObj => ({
-            url: linkObj.url || linkObj.link, // <--- AQUÍ ESTÁ EL BLINDAJE
+            url: linkObj.url || linkObj.link, 
             quality: linkObj.quality || 'unknown',
             format: 'mp4' 
         }));
@@ -55,7 +55,7 @@ async function handler(req, res) {
         });
     }
 
-    // Si falló lo anterior, intentamos media_url
+    // Si falló lo anterior, intentamos media_url como respaldo
     if (streams.length === 0 && songData.media_url) {
          streams.push({ url: songData.media_url, quality: 'default', format: 'mp4' });
     }

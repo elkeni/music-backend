@@ -30,16 +30,17 @@ async function handler(req, res) {
 
     const data = await r.json();
     
-    // --- CORRECCIÓN BASADA EN TU CAPTURA ---
-    // Ruta exacta: data -> songs -> results
+    // CORRECCIÓN 1: La ruta correcta según tu captura es data.songs.results
+    // Usamos ?. para evitar errores si alguna propiedad falta
     const rawResults = data.data?.songs?.results || [];
 
     const results = rawResults.slice(0, Number(limit)).map((item) => {
-      // Corrección: Usamos .url en lugar de .link
+      // CORRECCIÓN 2: Buscamos .url en lugar de .link
       let thumb = '';
       if (Array.isArray(item.image)) {
-          // Buscamos la imagen de 500x500 o la última disponible
-          thumb = item.image.find(i => i.quality === '500x500')?.url || item.image[item.image.length - 1]?.url;
+          // Intentamos buscar la de 500x500, si no, la última disponible
+          const highQual = item.image.find(i => i.quality === '500x500');
+          thumb = highQual ? highQual.url : item.image[item.image.length - 1]?.url;
       } else {
           thumb = item.image;
       }
