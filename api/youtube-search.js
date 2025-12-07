@@ -1,7 +1,7 @@
 // api/youtube-search.js
 
 const SOURCE_APIS = [
-    'https://appmusic-phi.vercel. app',
+    'https://appmusic-phi.vercel.app',
     'https://saavn.dev'
 ];
 
@@ -20,214 +20,198 @@ const allowCors = (fn) => async (req, res) => {
  * Normaliza texto para comparación
  */
 function normalize(text) {
-    if (!text) return '';
+    if (! text) return '';
     return text
         .toLowerCase()
         .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '') // Quitar tildes
-        .replace(/7/g, 't')              // Ca7riel -> Catriel
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/7/g, 't')
         .replace(/4/g, 'a')
         .replace(/3/g, 'e')
         .replace(/1/g, 'i')
         .replace(/0/g, 'o')
-        .replace(/&/g, ' and ')
-        .replace(/[^\w\s]/g, ' ')        // Quitar símbolos
+        .replace(/&/g, ' ')
+        .replace(/[^\w\s]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 }
 
 /**
- * Extrae el nombre del artista del query
- * "mana rayando el sol" -> intenta detectar "mana"
+ * Palabras que SIEMPRE indican contenido no original
  */
-function extractArtistFromQuery(query) {
-    // Lista de artistas conocidos para matching directo
-    const knownArtists = [
-        'mana', 'maná', 
-        'ca7riel', 'catriel',
-        'paco amoroso',
-        'bad bunny',
-        'shakira',
-        'peso pluma',
-        'feid',
-        'karol g',
-        'daddy yankee',
-        'j balvin',
-        'ozuna',
-        'anuel',
-        'rauw alejandro',
-        'soda stereo',
-        'los fabulosos cadillacs',
-        'cafe tacvba', 'café tacuba', 'cafe tacuba'
-    ];
-    
-    const normalizedQuery = normalize(query);
-    
-    for (const artist of knownArtists) {
-        if (normalizedQuery.includes(normalize(artist))) {
-            return normalize(artist);
-        }
-    }
-    
-    // Si no está en la lista, asumir que la primera palabra es el artista
-    const words = normalizedQuery.split(' ');
-    if (words.length >= 2) {
-        return words[0];
-    }
-    
-    return null;
-}
-
-/**
- * Palabras prohibidas en títulos (indican que NO es el original)
- */
-const BLACKLISTED_WORDS = [
-    'karaoke', 'cover', 'tribute', 'instrumental',
-    'remix', 'slowed', 'reverb', '8d audio', '8d',
-    'chipmunk', 'nightcore', 'daycore',
-    'chichimix', 'megamix', 'enganchado', 'enganchados',
-    'mix de', 'medley', 'mashup',
-    'version cumbia', 'cumbia remix',
-    'ringtone', 'tono', 'tonos'
+const HARD_BLACKLIST = [
+    'karaoke', 'instrumental', 'chipmunk', 'nightcore', 
+    'ringtone', '8d audio', '8d ', 'tono de llamada'
 ];
 
 /**
- * Verifica si un resultado es válido
+ * Palabras sospechosas (penalizan pero no rechazan)
  */
-function isValidResult(item, expectedArtist) {
-    const title = normalize(item.name || item.title || '');
-    const artist = normalize(
-        item.primaryArtists || 
-        item.artists?. primary?. map(a => a.name). join(' ') || 
-        ''
-    );
-    
-    // 1. Verificar blacklist en título
-    for (const bad of BLACKLISTED_WORDS) {
-        if (title. includes(bad)) {
-            console.log(`[Filter] ❌ Rechazado por blacklist "${bad}": ${item.name}`);
-            return false;
-        }
-    }
-    
-    // 2.  Verificar blacklist en nombre del artista
-    const artistLower = artist.toLowerCase();
-    const suspiciousArtists = ['chichimarimba', 'karaoke', 'tribute', 'cover band'];
-    for (const sus of suspiciousArtists) {
-        if (artistLower.includes(sus)) {
-            console.log(`[Filter] ❌ Rechazado por artista sospechoso "${sus}": ${item.name}`);
-            return false;
-        }
-    }
-    
-    // 3. Si tenemos un artista esperado, verificar que coincida
-    if (expectedArtist && expectedArtist.length > 2) {
-        const artistWords = artist.split(' ');
-        const expectedWords = expectedArtist.split(' ');
-        
-        let artistMatch = false;
-        for (const expWord of expectedWords) {
-            if (expWord.length < 3) continue;
-            if (artist.includes(expWord)) {
-                artistMatch = true;
-                break;
-            }
-        }
-        
-        if (!artistMatch) {
-            // Verificar también en el título (a veces el artista está ahí)
-            for (const expWord of expectedWords) {
-                if (expWord.length < 3) continue;
-                if (title.includes(expWord)) {
-                    artistMatch = true;
-                    break;
-                }
-            }
-        }
-        
-        if (!artistMatch) {
-            console.log(`[Filter] ❌ Artista no coincide.  Esperado: "${expectedArtist}", Encontrado: "${artist}"`);
-            return false;
-        }
-    }
-    
-    // 4. Verificar duración razonable (entre 1 y 10 minutos)
-    const duration = item.duration || 0;
-    if (duration > 0 && (duration < 60 || duration > 600)) {
-        console.log(`[Filter] ⚠️ Duración sospechosa (${duration}s): ${item.name}`);
-        // No rechazar, solo advertir
-    }
-    
-    return true;
-}
+const SOFT_BLACKLIST = [
+    'cover', 'tribute', 'remix', 'slowed', 'reverb',
+    'mix', 'medley', 'mashup', 'enganchado', 'megamix',
+    'version', 'live', 'en vivo', 'acoustic', 'unplugged'
+];
 
 /**
- * Calcula score de relevancia
+ * Artistas/canales sospechosos (covers conocidos)
  */
-function calculateScore(item, query, expectedArtist) {
-    let score = 0;
+const SUSPICIOUS_ARTISTS = [
+    'chichimarimba', 'karaoke', 'tribute', 'cover band',
+    'midi', 'music box', 'lullaby', 'kids'
+];
+
+/**
+ * Verifica si un resultado debe ser rechazado completamente
+ */
+function shouldReject(item) {
     const title = normalize(item.name || item.title || '');
     const artist = normalize(
         item.primaryArtists || 
         item.artists?.primary?.map(a => a.name).join(' ') || 
         ''
     );
-    const queryNorm = normalize(query);
-    const queryWords = queryNorm.split(' '). filter(w => w.length > 2);
     
-    // Coincidencia de palabras en título
-    for (const word of queryWords) {
-        if (title.includes(word)) score += 20;
-    }
-    
-    // Coincidencia de artista (muy importante)
-    if (expectedArtist) {
-        const expectedWords = expectedArtist.split(' '). filter(w => w.length > 2);
-        for (const word of expectedWords) {
-            if (artist.includes(word)) score += 50;
+    // Rechazar si tiene palabras de la blacklist dura
+    for (const bad of HARD_BLACKLIST) {
+        if (title.includes(bad) || artist.includes(bad)) {
+            return `Hard blacklist: ${bad}`;
         }
     }
     
-    // Bonus por match exacto de artista
-    if (expectedArtist && artist.includes(expectedArtist)) {
-        score += 100;
+    // Rechazar si el artista es sospechoso
+    for (const sus of SUSPICIOUS_ARTISTS) {
+        if (artist.includes(sus)) {
+            return `Suspicious artist: ${sus}`;
+        }
     }
     
-    // Penalizar títulos muy largos (probablemente compilaciones)
-    if (title. length > 50) score -= 20;
-    if (title.includes('/')) score -= 30; // "Song1 / Song2 / Song3"
+    return null;
+}
+
+/**
+ * Calcula score de relevancia (más alto = mejor)
+ */
+function calculateScore(item, queryWords, expectedArtistWords) {
+    let score = 50; // Score base
+    
+    const title = normalize(item.name || item.title || '');
+    const artist = normalize(
+        item.primaryArtists || 
+        item.artists?.primary?.map(a => a.name).join(' ') || 
+        ''
+    );
+    const titleWords = title.split(' ');
+    const artistWords = artist.split(' ');
+    
+    // ===== BONUS POR COINCIDENCIAS =====
+    
+    // Coincidencia de palabras del query en el título
+    for (const word of queryWords) {
+        if (word.length < 2) continue;
+        if (title.includes(word)) score += 15;
+        if (titleWords.includes(word)) score += 10; // Palabra exacta
+    }
+    
+    // Coincidencia de artista esperado
+    for (const word of expectedArtistWords) {
+        if (word.length < 2) continue;
+        if (artist.includes(word)) score += 40;
+        if (artistWords.includes(word)) score += 30; // Palabra exacta
+    }
+    
+    // Bonus grande si el artista coincide muy bien
+    const artistMatchCount = expectedArtistWords.filter(w => 
+        w.length > 2 && artist.includes(w)
+    ).length;
+    
+    if (artistMatchCount >= 1) score += 50;
+    if (artistMatchCount >= 2) score += 30;
+    
+    // ===== PENALIZACIONES =====
+    
+    // Penalizar palabras de soft blacklist
+    for (const bad of SOFT_BLACKLIST) {
+        if (title.includes(bad)) {
+            // Solo penalizar si NO está en el query original
+            const queryStr = queryWords.join(' ');
+            if (!queryStr.includes(bad)) {
+                score -= 40;
+            }
+        }
+    }
+    
+    // Penalizar títulos muy largos (compilaciones)
+    if (title.length > 60) score -= 20;
+    if (title.length > 80) score -= 20;
+    
+    // Penalizar si tiene muchos "/" (medleys)
+    const slashCount = (item.name || '').split('/').length - 1;
+    if (slashCount >= 2) score -= 50;
+    if (slashCount >= 1) score -= 20;
+    
+    // Penalizar duraciones extremas
+    const duration = item.duration || 0;
+    if (duration > 0) {
+        if (duration < 60) score -= 30;  // Muy corta
+        if (duration > 480) score -= 30; // Más de 8 min
+        if (duration > 600) score -= 50; // Más de 10 min (probablemente mix)
+    }
+    
+    // Bonus por tener duración normal (2-5 min)
+    if (duration >= 120 && duration <= 300) score += 20;
     
     return score;
 }
 
 /**
- * Genera variaciones del query para búsqueda
+ * Extrae palabras clave del query para matching
  */
-function generateQueryVariations(query) {
-    const variations = new Set();
+function extractQueryParts(query) {
     const norm = normalize(query);
+    const words = norm.split(' ').filter(w => w.length > 1);
     
-    variations.add(query);
-    variations.add(norm);
+    // Intentar detectar artista (primera palabra o palabras antes de la canción)
+    // Esto es heurístico
+    const artistWords = [];
+    const allWords = [...words];
     
-    // Sin tildes
-    const noTildes = query.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    variations. add(noTildes);
+    // Artistas conocidos para mejor detección
+    const knownArtists = {
+        'mana': ['mana'],
+        'maná': ['mana'],
+        'ca7riel': ['catriel', 'ca7riel'],
+        'catriel': ['catriel'],
+        'paco amoroso': ['paco', 'amoroso'],
+        'bad bunny': ['bad', 'bunny'],
+        'shakira': ['shakira'],
+        'daddy yankee': ['daddy', 'yankee'],
+    };
     
-    // Con "official" para encontrar originales
-    variations.add(`${query} official`);
+    // Buscar artistas conocidos en el query
+    for (const [artistName, artistTokens] of Object.entries(knownArtists)) {
+        const artistNorm = normalize(artistName);
+        if (norm.includes(artistNorm) || artistTokens.some(t => norm.includes(t))) {
+            artistWords.push(...artistTokens);
+        }
+    }
     
-    return [... variations];
+    // Si no encontramos artista conocido, asumir primera palabra
+    if (artistWords.length === 0 && words.length > 0) {
+        artistWords.push(words[0]);
+    }
+    
+    return {
+        queryWords: allWords,
+        artistWords: [...new Set(artistWords)]
+    };
 }
 
-/**
- * Busca en una API
- */
 async function searchApi(apiBase, query, limit) {
     try {
         const url = `${apiBase}/api/search/songs?query=${encodeURIComponent(query)}&limit=${limit}`;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
         
         const response = await fetch(url, {
             signal: controller.signal,
@@ -238,8 +222,9 @@ async function searchApi(apiBase, query, limit) {
         if (!response.ok) return [];
         
         const data = await response.json();
-        return data.data?. results || [];
+        return data.data?.results || [];
     } catch (e) {
+        console.warn(`[youtube-search] API error: ${e.message}`);
         return [];
     }
 }
@@ -257,51 +242,79 @@ async function handler(req, res) {
         });
     }
 
-    const expectedArtist = extractArtistFromQuery(searchQuery);
-    console.log(`[youtube-search] 🎤 Artista esperado: "${expectedArtist || 'no detectado'}"`);
+    const { queryWords, artistWords } = extractQueryParts(searchQuery);
+    console.log(`[youtube-search] 📝 Query words: [${queryWords.join(', ')}]`);
+    console.log(`[youtube-search] 🎤 Artist words: [${artistWords.join(', ')}]`);
 
-    const queryVariations = generateQueryVariations(searchQuery);
+    // Variaciones de búsqueda
+    const searchVariations = [
+        searchQuery,
+        normalize(searchQuery),
+        searchQuery.normalize('NFD').replace(/[\u0300-\u036f]/g, ''),
+    ];
+    
+    // Eliminar duplicados
+    const uniqueVariations = [...new Set(searchVariations)];
+
     const allResults = [];
     const seenIds = new Set();
+    const rejectedCount = { hard: 0, score: 0 };
 
-    // Buscar en todas las APIs con todas las variaciones
     for (const apiBase of SOURCE_APIS) {
-        for (const queryVar of queryVariations) {
-            const results = await searchApi(apiBase, queryVar, 20);
+        for (const searchVar of uniqueVariations) {
+            console.log(`[youtube-search] 🌐 Buscando en ${apiBase}: "${searchVar}"`);
+            
+            const results = await searchApi(apiBase, searchVar, 25);
+            console.log(`[youtube-search] 📦 Recibidos: ${results.length} resultados`);
             
             for (const item of results) {
                 if (seenIds.has(item.id)) continue;
                 seenIds.add(item.id);
                 
-                // Validar resultado
-                if (!isValidResult(item, expectedArtist)) {
+                // Verificar rechazo duro
+                const rejectReason = shouldReject(item);
+                if (rejectReason) {
+                    console.log(`[youtube-search] ❌ Rechazado: "${item.name}" - ${rejectReason}`);
+                    rejectedCount.hard++;
                     continue;
                 }
                 
                 // Calcular score
-                item._score = calculateScore(item, searchQuery, expectedArtist);
-                allResults.push(item);
+                const score = calculateScore(item, queryWords, artistWords);
+                item._score = score;
+                
+                // Solo aceptar si tiene score positivo
+                if (score > 0) {
+                    allResults.push(item);
+                } else {
+                    console.log(`[youtube-search] ⚠️ Score bajo (${score}): "${item.name}"`);
+                    rejectedCount.score++;
+                }
             }
         }
         
-        // Si tenemos buenos resultados, no seguir
-        if (allResults.filter(r => r._score > 50).length >= limit) {
+        // Si tenemos suficientes buenos resultados, parar
+        const goodResults = allResults.filter(r => r._score >= 50);
+        if (goodResults.length >= limit) {
+            console.log(`[youtube-search] ✅ Suficientes buenos resultados, deteniendo búsqueda`);
             break;
         }
     }
+
+    console.log(`[youtube-search] 📊 Total válidos: ${allResults.length}, Rechazados: ${rejectedCount.hard} hard, ${rejectedCount.score} score`);
 
     // Ordenar por score
     allResults.sort((a, b) => b._score - a._score);
 
     // Formatear resultados
-    const results = allResults.slice(0, Number(limit)). map((item) => {
+    const results = allResults.slice(0, Number(limit)).map((item) => {
         let thumb = '';
         if (Array.isArray(item.image)) {
-            const hq = item.image. find(i => i.quality === '500x500');
-            thumb = hq?. url || item.image[item.image.length - 1]?.url || '';
+            const hq = item.image.find(i => i.quality === '500x500');
+            thumb = hq?.url || item.image[item.image.length - 1]?.url || '';
         }
 
-        let artistName = item.primaryArtists || 
+        const artistName = item.primaryArtists || 
             item.artists?.primary?.map(a => a.name).join(', ') || 
             'Unknown';
 
@@ -316,9 +329,10 @@ async function handler(req, res) {
         };
     });
 
-    console.log(`[youtube-search] ✅ Retornando ${results.length} resultados válidos`);
     if (results.length > 0) {
         console.log(`[youtube-search] 🏆 Top: "${results[0].title}" by ${results[0].author.name} (score: ${results[0]._score})`);
+    } else {
+        console.log(`[youtube-search] ⚠️ Sin resultados válidos para: "${searchQuery}"`);
     }
 
     return res.status(200).json({ success: true, results });
