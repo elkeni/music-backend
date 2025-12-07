@@ -26,13 +26,17 @@ async function handler(req, res) {
     }
 
     try {
-        const url = `${SOURCE_API}/api/songs?id=${encodeURIComponent(videoId)}`;
+        // ✅ RUTA CORRECTA: /api/songs/{id}
+        const url = `${SOURCE_API}/api/songs/${videoId}`;
         console.log(`[youtube-streams] Calling: ${url}`);
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-        const response = await fetch(url, { signal: controller.signal });
+        const response = await fetch(url, {
+            signal: controller.signal,
+            headers: { 'Accept': 'application/json' }
+        });
         clearTimeout(timeoutId);
 
         if (!response.ok) {
@@ -44,7 +48,9 @@ async function handler(req, res) {
         }
 
         const data = await response.json();
-        const songData = data.data?.[0] || data[0] || data.data || data;
+        
+        // ✅ ESTRUCTURA CORRECTA: data.data[0]
+        const songData = data.data?.[0] || data.data || data;
 
         if (!songData) {
             return res.status(404).json({
@@ -53,31 +59,16 @@ async function handler(req, res) {
             });
         }
 
+        // ✅ Extraer downloadUrl
         let streams = [];
-        const downloadLinks = songData.downloadUrl || songData.download_url || [];
+        const downloadLinks = songData.downloadUrl || [];
 
         if (Array.isArray(downloadLinks)) {
-            streams = downloadLinks
-                .map(linkObj => ({
-                    url: linkObj.url || linkObj.link,
-                    quality: linkObj.quality || 'unknown',
-                    format: 'mp4'
-                }))
-                .filter(s => s.url);
-        } else if (typeof downloadLinks === 'string') {
-            streams.push({
-                url: downloadLinks,
-                quality: 'high',
+            streams = downloadLinks.map(linkObj => ({
+                url: linkObj.url,
+                quality: linkObj.quality || 'unknown',
                 format: 'mp4'
-            });
-        }
-
-        if (streams.length === 0 && songData.media_url) {
-            streams.push({
-                url: songData.media_url,
-                quality: 'default',
-                format: 'mp4'
-            });
+            })).filter(s => s.url);
         }
 
         if (streams.length === 0) {
