@@ -36,7 +36,7 @@ export default async function handler(req, res) {
         return {
           title: item.title,
           author: { name: item.uploader || item.uploaderName || '' },
-          duration: item.duration,
+          duration: item.duration, // "3:45" o número
           videoId: vid,
         };
       });
