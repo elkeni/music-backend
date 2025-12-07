@@ -9,7 +9,7 @@ const allowCors = (fn) => async (req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
     if (req.method === 'OPTIONS') {
-        res. status(200).end();
+        res.status(200).end();
         return;
     }
     return await fn(req, res);
@@ -23,7 +23,7 @@ async function handler(req, res) {
     if (!endpoint) {
         return res.status(400).json({ 
             success: false, 
-            error: 'Missing endpoint parameter.  Example: ? endpoint=/chart/0/tracks' 
+            error: 'Missing endpoint parameter. Example: ? endpoint=/chart/0/tracks' 
         });
     }
 
@@ -31,7 +31,7 @@ async function handler(req, res) {
         // Construir URL completa de Deezer
         // endpoint ya incluye los query params de Deezer, así que lo pasamos directo
         const deezerUrl = `${DEEZER_API}${endpoint}`;
-        console. log(`[deezer-proxy] Fetching: ${deezerUrl}`);
+        console.log(`[deezer-proxy] Fetching: ${deezerUrl}`);
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000);
@@ -46,7 +46,7 @@ async function handler(req, res) {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-            return res.status(response.status). json({ 
+            return res.status(response.status).json({ 
                 success: false, 
                 error: `Deezer API error: ${response.status}` 
             });
@@ -58,11 +58,11 @@ async function handler(req, res) {
         return res.status(200).json(data);
 
     } catch (err) {
-        if (err. name === 'AbortError') {
+        if (err.name === 'AbortError') {
             return res.status(504).json({ success: false, error: 'Deezer API timeout' });
         }
         console.error('[deezer-proxy] Error:', err.message);
-        return res.status(500). json({ success: false, error: err.message });
+        return res.status(500).json({ success: false, error: err.message });
     }
 }
 

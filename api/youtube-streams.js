@@ -7,7 +7,7 @@ const allowCors = (fn) => async (req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
-        res. status(200).end();
+        res.status(200).end();
         return;
     }
     return await fn(req, res);
@@ -36,18 +36,18 @@ async function handler(req, res) {
         const r = await fetch(url, { signal: controller.signal });
         clearTimeout(timeoutId);
 
-        if (!r. ok) {
+        if (!r.ok) {
             console.error(`[youtube-streams] ❌ Source API respondió: ${r.status}`);
-            return res.status(r.status). json({ 
+            return res.status(r.status).json({ 
                 success: false, 
                 error: `Source API error: ${r.status}` 
             });
         }
 
-        const data = await r. json();
+        const data = await r.json();
 
         // Saavn puede devolver diferentes estructuras
-        const songData = data.data?.[0] || data[0] || data. data || data;
+        const songData = data.data?.[0] || data[0] || data.data || data;
 
         if (!songData) {
             console.warn(`[youtube-streams] ⚠️ No se encontró canción con id: ${videoId}`);
@@ -63,13 +63,13 @@ async function handler(req, res) {
         if (Array.isArray(downloadLinks)) {
             streams = downloadLinks
                 .map(linkObj => ({
-                    url: linkObj. url || linkObj. link,
-                    quality: linkObj. quality || 'unknown',
+                    url: linkObj.url || linkObj.link,
+                    quality: linkObj.quality || 'unknown',
                     format: 'mp4'
                 }))
                 .filter(s => s.url); // Filtrar streams sin URL
         } else if (typeof downloadLinks === 'string') {
-            streams. push({
+            streams.push({
                 url: downloadLinks,
                 quality: 'high',
                 format: 'mp4'
@@ -85,7 +85,7 @@ async function handler(req, res) {
             });
         }
 
-        const elapsed = Date. now() - startTime;
+        const elapsed = Date.now() - startTime;
 
         if (streams.length === 0) {
             console.warn(`[youtube-streams] ⚠️ No hay streams disponibles para: ${videoId}`);
@@ -96,11 +96,11 @@ async function handler(req, res) {
         }
 
         console.log(`[youtube-streams] ✅ ${streams.length} streams en ${elapsed}ms`);
-        return res.status(200). json({ success: true, audioStreams: streams });
+        return res.status(200).json({ success: true, audioStreams: streams });
 
     } catch (err) {
         if (err.name === 'AbortError') {
-            console. error('[youtube-streams] ⏱️ Timeout');
+            console.error('[youtube-streams] ⏱️ Timeout');
             return res.status(504).json({ success: false, error: 'Source API timeout' });
         }
         console.error('[youtube-streams] 💥 CRASH:', err.message);
