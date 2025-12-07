@@ -20,9 +20,8 @@ async function handler(req, res) {
   }
 
   try {
-    // Si appmusic-phi usa "/api/songs?id=" para obtener detalles y links:
     const url = `${SOURCE_API}/api/songs?id=${videoId}`;
-    console.log(`[proxy-streams] Fetching details for: ${videoId}`);
+    console.log(`[proxy-streams] Fetching song ID: ${videoId}`);
 
     const r = await fetch(url);
     if (!r.ok) {
@@ -31,28 +30,34 @@ async function handler(req, res) {
 
     const data = await r.json();
     
-    // Manejo de la estructura de respuesta (Saavn API suele devolver un array o un objeto data)
-    const songData = data.data?.[0] || data[0] || data;
+    // Saavn suele devolver { data: [songObj] }
+    const songData = data.data?.[0] || data[0] || data.data || data;
 
-    if (!songData || !songData.downloadUrl) {
-       console.error('[proxy-streams] No downloadUrl found in:', JSON.stringify(data).slice(0, 100));
-       return res.status(404).json({ success: false, error: 'Stream not found in source' });
+    if (!songData) {
+       return res.status(404).json({ success: false, error: 'Song not found' });
     }
 
-    // Extraemos los links de audio. Saavn suele dar varios bitrates.
-    const streams = songData.downloadUrl.map(linkObj => ({
-        url: linkObj.link,
-        quality: linkObj.quality || 'unknown',
-        format: 'mp4/aac' // Saavn suele ser AAC/MP4
-    }));
+    let streams = [];
+    const downloadLinks = songData.downloadUrl || [];
 
-    // Si downloadUrl no es un array, sino un string directo (depende de la versión de la API)
-    if (typeof songData.downloadUrl === 'string') {
+    // Lógica robusta: soporta tanto .url como .link
+    if (Array.isArray(downloadLinks)) {
+        streams = downloadLinks.map(linkObj => ({
+            url: linkObj.url || linkObj.link, // <--- AQUÍ ESTÁ EL BLINDAJE
+            quality: linkObj.quality || 'unknown',
+            format: 'mp4' 
+        }));
+    } else if (typeof downloadLinks === 'string') {
         streams.push({
-            url: songData.downloadUrl,
+            url: downloadLinks,
             quality: 'high',
             format: 'mp4'
         });
+    }
+
+    // Si falló lo anterior, intentamos media_url
+    if (streams.length === 0 && songData.media_url) {
+         streams.push({ url: songData.media_url, quality: 'default', format: 'mp4' });
     }
 
     return res.status(200).json({ success: true, audioStreams: streams });
