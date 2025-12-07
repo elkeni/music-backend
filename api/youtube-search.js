@@ -1,10 +1,10 @@
-// api/youtube-search. js
+// api/youtube-search.js
 
 const SOURCE_API='https://appmusic-phi.vercel.app';
 
 const allowCors = (fn) => async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res. setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
@@ -21,7 +21,7 @@ async function handler(req, res) {
     console.log(`[youtube-search] Query: "${searchQuery}", Limit: ${limit}`);
 
     if (!searchQuery) {
-        return res.status(400). json({
+        return res.status(400).json({
             success: false,
             error: 'Missing query parameter (q)'
         });
@@ -53,7 +53,7 @@ async function handler(req, res) {
 
         if (rawResults.length === 0) {
             console.warn(`[youtube-search] No results found`);
-            return res.status(200). json({ success: true, results: [] });
+            return res.status(200).json({ success: true, results: [] });
         }
 
         const results = rawResults.slice(0, Number(limit)).map((item) => {
@@ -69,7 +69,7 @@ async function handler(req, res) {
             if (item.artists?.primary && item.artists.primary.length > 0) {
                 artistName = item.artists.primary.map(a => a.name).join(', ');
             } else if (item.primaryArtists) {
-                artistName = item. primaryArtists;
+                artistName = item.primaryArtists;
             } else if (item.artist) {
                 artistName = item.artist;
             }
@@ -84,7 +84,7 @@ async function handler(req, res) {
             };
         });
 
-        console. log(`[youtube-search] Found ${results.length} results`);
+        console.log(`[youtube-search] Found ${results.length} results`);
         return res.status(200).json({ success: true, results });
 
     } catch (err) {
@@ -93,7 +93,7 @@ async function handler(req, res) {
             return res.status(504).json({ success: false, error: 'Timeout' });
         }
         console.error('[youtube-search] Error:', err.message);
-        return res.status(500). json({ success: false, error: err.message });
+        return res.status(500).json({ success: false, error: err.message });
     }
 }
 
