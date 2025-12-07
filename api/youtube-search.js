@@ -4,9 +4,12 @@ const PIPED_INSTANCE = 'https://pipedapi.tokhmi.xyz';
 
 export default async function handler(req, res) {
   try {
+    console.log('[youtube-search] handler start', req.query);
+
     const { q, limit = 8 } = req.query || {};
 
     if (!q) {
+      console.log('[youtube-search] missing q');
       return res.status(400).json({ success: false, error: 'Missing q' });
     }
 
@@ -14,15 +17,21 @@ export default async function handler(req, res) {
       q
     )}&filter=videos&region=US`;
 
+    console.log('[youtube-search] fetching', url);
+
     const r = await fetch(url);
+    console.log('[youtube-search] status', r.status);
+
     if (!r.ok) {
-      console.error('[youtube-search] piped error status', r.status);
+      const text = await r.text().catch(() => '');
+      console.error('[youtube-search] piped error status', r.status, text);
       return res
         .status(r.status)
         .json({ success: false, error: 'Piped search error' });
     }
 
     const data = await r.json();
+    console.log('[youtube-search] data length', Array.isArray(data) ? data.length : 'not array');
 
     const results = (Array.isArray(data) ? data : [])
       .slice(0, limit)
@@ -36,12 +45,13 @@ export default async function handler(req, res) {
         return {
           title: item.title,
           author: { name: item.uploader || item.uploaderName || '' },
-          duration: item.duration, // "3:45" o número
+          duration: item.duration,
           videoId: vid,
         };
       });
 
     res.setHeader('Access-Control-Allow-Origin', '*');
+    console.log('[youtube-search] success, results', results.length);
     return res.status(200).json({ success: true, results });
   } catch (err) {
     console.error('[api/youtube-search] CRASH', err);
