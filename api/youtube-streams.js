@@ -1,6 +1,13 @@
 // api/youtube-streams.js
 
-const PIPED_INSTANCE = 'https://pipedapi.kavin.rocks'; // Kavin suele ser más estable que tokhmi
+const PIPED_INSTANCES = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.tokhmi.xyz',
+  'https://pipedapi.moomoo.me',
+  'https://pipedapi.syncpundit.io',
+  'https://api-piped.mha.fi',
+  'https://piped-api.lunar.icu'
+];
 
 const allowCors = (fn) => async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -19,45 +26,44 @@ async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'Missing videoId' });
   }
 
-  const url = `${PIPED_INSTANCE}/streams/${videoId}`;
-  console.log(`[youtube-streams] Fetching streams for: ${videoId}`);
+  let lastError = null;
 
-  try {
-    const r = await fetch(url);
-
-    if (!r.ok) {
-      console.error(`[youtube-streams] Upstream error ${r.status}`);
-      return res.status(r.status).json({ success: false, error: 'Upstream stream error' });
-    }
-
-    let data;
+  for (const baseUrl of PIPED_INSTANCES) {
     try {
-      data = await r.json();
-    } catch (parseErr) {
-      console.error('[youtube-streams] JSON Parse Error', parseErr);
-      return res.status(502).json({ success: false, error: 'Bad upstream response' });
+      const url = `${baseUrl}/streams/${videoId}`;
+      console.log(`[youtube-streams] Trying: ${baseUrl}`);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); 
+
+      const r = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      if (r.ok) {
+        const data = await r.json();
+        
+        if (data.error) throw new Error(data.error);
+
+        const audioStreams = (data.audioStreams || []).map((stream) => ({
+          url: stream.url,
+          quality: stream.quality || `${stream.bitrate || 0}bps`,
+          format: stream.format || (stream.mimeType ? stream.mimeType.split('/')[1] : 'mp3'),
+          contentLength: stream.contentLength
+        }));
+
+        return res.status(200).json({ success: true, audioStreams });
+      }
+      
+      console.warn(`[youtube-streams] Failed ${baseUrl}: ${r.status}`);
+      lastError = `Status ${r.status}`;
+
+    } catch (err) {
+      console.warn(`[youtube-streams] Error ${baseUrl}: ${err.message}`);
+      lastError = err.message;
     }
-
-    if (data.error) {
-        return res.status(400).json({ success: false, error: data.error });
-    }
-
-    const audioStreams = (data.audioStreams || []).map((stream) => ({
-      url: stream.url,
-      quality: stream.quality || `${stream.bitrate || 0}bps`,
-      format: stream.format || (stream.mimeType ? stream.mimeType.split('/')[1] : 'mp3'),
-      contentLength: stream.contentLength
-    }));
-
-    // Ordenar por calidad (bitrate más alto primero es una buena práctica)
-    // Nota: Esto es opcional, depende de tu lógica de frontend.
-    
-    return res.status(200).json({ success: true, audioStreams });
-
-  } catch (err) {
-    console.error('[youtube-streams] CRASH:', err);
-    return res.status(500).json({ success: false, error: 'Internal Server Error' });
   }
+
+  return res.status(503).json({ success: false, error: 'All streams instances failed', lastDetail: lastError });
 }
 
 export default allowCors(handler);

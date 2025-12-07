@@ -1,13 +1,17 @@
 // api/youtube-search.js
 
-// Lista de instancias por si una falla. Puedes rotarlas o usar una principal.
+// Lista de instancias públicas activas (Mezcla de regiones para evitar bloqueos)
+// Si una falla, el código probará la siguiente automáticamente.
 const PIPED_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://pipedapi.tokhmi.xyz',
-  'https://api.piped.io' 
+  'https://pipedapi.kavin.rocks',      // Official (a veces inestable)
+  'https://pipedapi.tokhmi.xyz',       // US
+  'https://pipedapi.moomoo.me',        // UK
+  'https://pipedapi.syncpundit.io',    // Multi-region
+  'https://api-piped.mha.fi',          // Finlandia
+  'https://piped-api.lunar.icu',       // Alemania
+  'https://pipedapi.r4fo.com'          // Alemania
 ];
 
-// Función auxiliar para CORS
 const allowCors = (fn) => async (req, res) => {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -30,56 +34,60 @@ async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'Missing query parameter (q)' });
   }
 
-  // Usamos la primera instancia (puedes implementar lógica de rotación si prefieres)
-  const baseUrl = PIPED_INSTANCES[0];
-  const url = `${baseUrl}/search?q=${encodeURIComponent(q)}&filter=videos`;
+  let lastError = null;
 
-  console.log(`[youtube-search] Fetching: ${url}`);
-
-  try {
-    const r = await fetch(url);
-    
-    // 1. Verificar status HTTP
-    if (!r.ok) {
-      const text = await r.text(); // Leemos como texto por si es error HTML
-      console.error(`[youtube-search] Piped Error ${r.status}:`, text.slice(0, 200)); // Logueamos solo el inicio
-      return res.status(r.status).json({ success: false, error: `Upstream error: ${r.status}` });
-    }
-
-    // 2. Intentar parsear JSON de forma segura
-    let data;
+  // BUCLE DE INTENTOS (FAILOVER)
+  for (const baseUrl of PIPED_INSTANCES) {
     try {
-      data = await r.json();
-    } catch (e) {
-      console.error('[youtube-search] Failed to parse JSON. Response might be HTML (Cloudflare).');
-      return res.status(502).json({ success: false, error: 'Invalid response from upstream' });
-    }
+      const url = `${baseUrl}/search?q=${encodeURIComponent(q)}&filter=videos`;
+      console.log(`[youtube-search] Trying instance: ${baseUrl}`);
 
-    // 3. Mapeo defensivo (items puede ser undefined si la búsqueda no trajo nada)
-    const items = data.items || []; 
-    
-    const results = items
-      .filter(item => item.type === 'stream') // Aseguramos que sea un video, no una playlist o canal
-      .slice(0, Number(limit))
-      .map((item) => {
-        // Piped a veces da la URL completa "/watch?v=ID" o solo el ID.
-        let vid = item.url ? item.url.replace('/watch?v=', '') : item.url;
+      // Añadimos un timeout de 4 segundos para no quedarnos colgados si una instancia es lenta
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000); 
+
+      const r = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      if (r.ok) {
+        // ¡ÉXITO! Procesamos y devolvemos la respuesta
+        const data = await r.json();
+        const items = data.items || [];
         
-        return {
-          title: item.title,
-          author: { name: item.uploaderName || 'Unknown' },
-          duration: item.duration, // Piped suele dar segundos (number) o string formateado.
-          videoId: vid,
-          thumbnail: item.thumbnail
-        };
-      });
+        const results = items
+          .filter(item => item.type === 'stream')
+          .slice(0, Number(limit))
+          .map((item) => {
+            let vid = item.url ? item.url.replace('/watch?v=', '') : item.url;
+            return {
+              title: item.title,
+              author: { name: item.uploaderName || 'Unknown' },
+              duration: item.duration,
+              videoId: vid,
+              thumbnail: item.thumbnail
+            };
+          });
 
-    return res.status(200).json({ success: true, results });
-
-  } catch (err) {
-    console.error('[youtube-search] CRITICAL ERROR:', err);
-    return res.status(500).json({ success: false, error: err.message });
+        console.log(`[youtube-search] Success with ${baseUrl}`);
+        return res.status(200).json({ success: true, results });
+      } else {
+        console.warn(`[youtube-search] Failed ${baseUrl} with status ${r.status}`);
+        lastError = `Status ${r.status}`;
+        // El bucle continuará con la siguiente instancia...
+      }
+    } catch (err) {
+      console.warn(`[youtube-search] Error connecting to ${baseUrl}: ${err.message}`);
+      lastError = err.message;
+      // El bucle continuará...
+    }
   }
+
+  // Si llegamos aquí, TODAS las instancias fallaron
+  return res.status(503).json({ 
+    success: false, 
+    error: 'All Piped instances failed. Try again later.', 
+    lastDetail: lastError 
+  });
 }
 
 export default allowCors(handler);
