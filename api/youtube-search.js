@@ -1,6 +1,6 @@
-// api/youtube-search.js
+// api/youtube-search. js
 
-const SOURCE_API = 'https://appmusic-phi.vercel.app';
+const SOURCE_API='https://appmusic-phi.vercel.app';
 
 const allowCors = (fn) => async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -28,8 +28,7 @@ async function handler(req, res) {
     }
 
     try {
-        // ✅ RUTA CORRECTA: /api/search/songs
-        const targetUrl = `${SOURCE_API}/api/search/songs? query=${encodeURIComponent(searchQuery)}&limit=${limit}`;
+        const targetUrl = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(searchQuery)}&limit=${limit}`;
         console.log(`[youtube-search] Calling: ${targetUrl}`);
 
         const controller = new AbortController();
@@ -50,29 +49,25 @@ async function handler(req, res) {
         }
 
         const data = await response.json();
-
-        // ✅ RUTA CORRECTA: data.data.results
-        const rawResults = data.data?. results || [];
+        const rawResults = data.data?.results || [];
 
         if (rawResults.length === 0) {
-            console. warn(`[youtube-search] No results found`);
-            return res.status(200).json({ success: true, results: [] });
+            console.warn(`[youtube-search] No results found`);
+            return res.status(200). json({ success: true, results: [] });
         }
 
         const results = rawResults.slice(0, Number(limit)).map((item) => {
-            // Extraer thumbnail de mejor calidad
             let thumb = '';
             if (Array.isArray(item.image)) {
-                const hq = item.image. find(i => i.quality === '500x500');
-                thumb = hq?.url || item. image[item.image.length - 1]?.url || '';
+                const hq = item.image.find(i => i.quality === '500x500');
+                thumb = hq?.url || item.image[item.image.length - 1]?.url || '';
             } else if (typeof item.image === 'string') {
                 thumb = item.image;
             }
 
-            // Extraer artista - ✅ ESTRUCTURA CORRECTA
             let artistName = 'Unknown';
             if (item.artists?.primary && item.artists.primary.length > 0) {
-                artistName = item.artists.primary. map(a => a.name). join(', ');
+                artistName = item.artists.primary.map(a => a.name).join(', ');
             } else if (item.primaryArtists) {
                 artistName = item. primaryArtists;
             } else if (item.artist) {
@@ -89,16 +84,16 @@ async function handler(req, res) {
             };
         });
 
-        console.log(`[youtube-search] ✅ Found ${results. length} results`);
+        console. log(`[youtube-search] Found ${results.length} results`);
         return res.status(200).json({ success: true, results });
 
     } catch (err) {
         if (err.name === 'AbortError') {
-            console. error('[youtube-search] Timeout');
+            console.error('[youtube-search] Timeout');
             return res.status(504).json({ success: false, error: 'Timeout' });
         }
-        console.error('[youtube-search] Error:', err. message);
-        return res.status(500).json({ success: false, error: err.message });
+        console.error('[youtube-search] Error:', err.message);
+        return res.status(500). json({ success: false, error: err.message });
     }
 }
 
