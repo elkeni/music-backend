@@ -210,25 +210,55 @@ function shouldReject(item, artistName) {
     return false;
 }
 
+function checkArtistMatch(target, current) {
+    const nTarget = normalize(target);
+    const nCurrent = normalize(current);
+    
+    if (!nTarget || !nCurrent) return 'none';
+
+    // 1.Coincidencia Directa (La más fuerte)
+    if (nCurrent.includes(nTarget) || nTarget.includes(nCurrent)) {
+        return 'exact';
+    }
+    
+    // 2.Coincidencia por Palabras (Token Matching)
+    // Resuelve problemas de orden: "A & B" vs "B & A"
+    const tTarget = nTarget.split(' ').filter(w => w.length > 1);
+    const tCurrent = nCurrent.split(' ').filter(w => w.length > 1);
+    
+    let matches = 0;
+    for (const w of tTarget) {
+        if (tCurrent.includes(w)) matches++;
+    }
+    
+    // Si encontramos todas las palabras del artista buscado (o la mayoría)
+    if (matches >= tTarget.length) return 'exact';
+    if (matches > 0 && matches >= (tTarget.length / 2)) return 'partial';
+    
+    return 'none';
+}
+
 function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
     let score = 50;
     
     const title = normalize(item.name || '');
-    const artist = normalize(targetArtist || ''); 
-    const itemArtist = normalize(item._artistName || ''); 
+    // Extraemos el artista del resultado una sola vez
+    const itemArtist = normalize(item._artistName || extractArtistName(item) || '');
     const duration = item.duration || 0;
 
-    // --- 1.FILTRO DE ARTISTA (CRÍTICO PARA RADIOHEAD) ---
-    if (artist && artist.length > 2) {
-        // Verificamos si hay coincidencia
-        const match = itemArtist.includes(artist) || artist.includes(itemArtist);
+    // --- 1.FILTRO DE ARTISTA INTELIGENTE ---
+    if (targetArtist && targetArtist.length > 1) {
+        const matchType = checkArtistMatch(targetArtist, itemArtist);
         
-        if (match) {
-            score += 100; // Coincidencia confirmada
+        if (matchType === 'exact') {
+            score += 100; // ¡Es el artista correcto!
+        } else if (matchType === 'partial') {
+            score += 50;  // Es probablemente el artista (ej: Feat, o solo un miembro)
         } else {
-            // ⭐ PENALIZACIÓN MORTAL: Si el artista no coincide, matamos el score.
-            // Esto evita que "Creep" de "Scala & Kolacny" suene cuando pides "Radiohead".
-            score -= 200; 
+            // ⭐ PENALIZACIÓN SUAVE:
+            // En vez de -200 (que mataba todo), bajamos a -50.
+            // Si el título es MUY bueno, aún podría salvarse.
+            score -= 50; 
         }
     }
 
@@ -241,19 +271,26 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
     if (wordsFound === trackWords.length) score += 50;
     else if (wordsFound > 0) score += 20;
 
-    // --- 3.FILTRO DE DURACIÓN ---
+    // --- 3.FILTRO DE DURACIÓN (Tolerancia Ampliada) ---
     if (targetDuration > 0) {
         const diff = Math.abs(duration - targetDuration);
-        if (diff <= 5) score += 50;       
-        else if (diff <= 15) score += 30; 
-        else if (diff > 45) score -= 50; // Penalización por duración muy distinta
+        if (diff <= 5) score += 40;       
+        else if (diff <= 15) score += 20; 
+        // Penalizamos menos fuerte la duración, por si es una versión remaster
+        else if (diff > 60) score -= 40; 
     }
 
     // --- 4.PENALIZACIONES DE CALIDAD ---
     for (const word of PENALTY_WORDS) {
-        if (title.includes(word)) score -= 50; // Aumenté la penalización
+        // Penalizamos "live", "cover", etc.
+        if (title.includes(word)) score -= 40;
     }
     
+    // Rechazo extra para covers explícitos en el artista
+    if (itemArtist.includes('cover') || itemArtist.includes('tribute')) {
+        score -= 100;
+    }
+
     return score;
 }
 
