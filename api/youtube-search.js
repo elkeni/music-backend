@@ -301,7 +301,7 @@ function calcScore(item, qWords, detectedArtist, qn, intent) {
         
         // Bonus extra por match exacto del artista
         if (exactMatch) {
-            score += 100;
+            score += 60;
         }
         
         // Si es strict y NO hay match, penalizar fuerte
