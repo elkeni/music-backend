@@ -48,7 +48,7 @@ function detectArtist(query) {
         }
     }
     const w = qn.split(' ');
-    return w.length > 0 ? { name: w[0], tokens: [w[0]] } : null;
+    return w.length > 0?{name:w[0], tokens: [w[0]] } : null;
 }
 
 const BLACKLIST = ['karaoke', 'instrumental', 'chipmunk', 'nightcore', 'ringtone', '8d audio', 'music box', 'lullaby'];
@@ -102,7 +102,7 @@ function calcScore(item, qWords, artist, qn) {
 
 async function searchApi(query, limit) {
     try {
-        const url = SOURCE_API + '/api/search/songs? query=' + encodeURIComponent(query) + '&limit=' + limit;
+        const url = SOURCE_API + '/api/search/songs?query=' + encodeURIComponent(query) + '&limit=' + limit;
         console.log('[search] Fetching:', url);
         
         const ctrl = new AbortController();
