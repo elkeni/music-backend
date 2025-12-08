@@ -199,48 +199,45 @@ function shouldReject(item, artistName) {
     return false;
 }
 
-function calcScore(item, qWords, detectedArtist, artistName) {
+function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
     let score =50;
     
     const title =normalize(item.name || '');
-    const artist =normalize(artistName);
-    
-    // BONUS por palabras del query en título
-    for (const w of qWords) {
-        if (w.length >=2 && title.includes(w)) score +=20;
-    }
-    
-    // BONUS por coincidencia de artista (IMPORTANTE)
-    if (detectedArtist && artist) {
-        for (const token of detectedArtist.tokens) {
-            if (artist.includes(token)) {
-                score +=100;
-            }
+    const artist =normalize(targetArtist || ''); // El artista que BUSCAMOS
+    const itemArtist =normalize(item._artistName || ''); // El artista del RESULTADO
+    const duration =item.duration || 0;
+
+    // 1.COINCIDENCIA DE ARTISTA (CRÍTICO)
+    if (artist && itemArtist) {
+        if (itemArtist.includes(artist) || artist.includes(itemArtist)) {
+            score +=100; // Match fuerte
+        } else {
+            // Si el artista es totalmente diferente, penalización masiva
+            score -=50; 
         }
     }
-    
-    // BONUS si el artista NO está vacío
-    if (artist && artist.length > 1 && artist !=='unknown') {
-        score +=30;
-    } else {
-        // PENALIZACIÓN si no hay artista
-        score -=50;
+
+    // 2.COINCIDENCIA DE TÍTULO
+    // Buscamos palabras clave del título original en el resultado
+    const trackWords =normalize(targetTrack || '').split(' ').filter(w => w.length > 2);
+    let wordsFound =0;
+    for (const w of trackWords) {
+        if (title.includes(w)) wordsFound++;
     }
+    if (wordsFound ===trackWords.length) score +=40; // Título completo encontrado
     
-    // PENALIZACIONES
+    // 3.FILTRO DE DURACIÓN PREVIO (Si el frontend envió duración)
+    if (targetDuration > 0) {
+        const diff =Math.abs(duration - targetDuration);
+        if (diff <=5) score +=50;       // Exacto
+        else if (diff <=15) score +=30; // Muy cerca
+        else if (diff > 45) score -=100; // Demasiado diferente (probablemente otra versión)
+    }
+
+    // 4.PENALIZACIONES ESTÁNDAR
     for (const word of PENALTY_WORDS) {
         if (title.includes(word)) score -=40;
     }
-    
-    // BONUS por duración normal
-    const dur =item.duration || 0;
-    if (dur >=120 && dur <=330) score +=25;
-    if (dur < 60) score -=30;
-    if (dur > 480) score -=20;
-    
-    // Penalizar títulos largos
-    if ((item.name || '').length > 60) score -=10;
-    if ((item.name || '').length > 80) score -=20;
     
     return score;
 }
@@ -273,76 +270,50 @@ async function searchApi(query, limit) {
 }
 
 async function handler(req, res) {
+    // Recibir parámetros explícitos
     const q =req.query.q || req.query.query || '';
+    const targetArtist =req.query.artist || ''; 
+    const targetTrack =req.query.track || '';
+    const targetDuration =parseInt(req.query.duration) || 0;
     const limit =parseInt(req.query.limit) || 10;
 
-    console.log('[youtube-search] START q="' + q + '"');
+    if (!q) return res.status(400).json({ success: false, error: 'Missing q' });
 
-    if (! q) {
-        return res.status(400).json({ success: false, error: 'Missing q' });
-    }
+    console.log(`[backend] Searching: "${q}"| Target: ${targetArtist} - ${targetTrack} (${targetDuration}s)`);
 
-    const qn =normalize(q);
-    const qWords =qn.split(' ').filter(w => w.length > 1);
-    const detectedArtist =detectArtist(q);
-    
-    console.log('[youtube-search] normalized="' + qn + '" artist=' + (detectedArtist?.name || 'none'));
-
-    const results =await searchApi(q, 30);
-    console.log('[youtube-search] Got', results.length, 'raw results');
+    // Usar la API externa (limitamos a 25 para ser rápidos pero tener variedad)
+    const results =await searchApi(q, 25);
     
     const scored =[];
-    
+    const qWords =normalize(q).split(' ').filter(w => w.length > 1);
+
     for (const item of results) {
-        // ⭐ Extraer artista correctamente
         const artistName =extractArtistName(item);
-        
-        console.log('[youtube-search] Item:', item.name, '| Artist extracted:', artistName);
-        
-        // Filtrar basura
-        if (shouldReject(item, artistName)) {
-            console.log('[REJECT]', item.name, 'by', artistName);
-            continue;
-        }
-        
-        // Calcular score
-        const score =calcScore(item, qWords, detectedArtist, artistName);
-        
+        item._artistName =artistName;
+
+        if (shouldReject(item, artistName)) continue;
+
+        // Pasar los datos exactos al score
+        const score =calcScore(item, qWords, targetArtist, targetTrack, targetDuration);
+
         if (score > 0) {
             item._score =score;
-            item._artistName =artistName; // Guardar para usar después
             scored.push(item);
-            console.log('[ACCEPT] score=' + score, item.name, 'by', artistName);
         }
     }
     
+    // Ordenar y cortar
     scored.sort((a, b) => b._score - a._score);
     
-    const final =scored.slice(0, limit).map(item => {
-        let thumb ='';
-        if (Array.isArray(item.image) && item.image.length > 0) {
-            const hq =item.image.find(i => i.quality ==='500x500');
-            thumb =hq ?hq.url : (item.image[item.image.length - 1].url || '');
-        }
-        
-        // ⭐ Usar el artista extraído correctamente
-        const artistName =item._artistName || extractArtistName(item) || 'Unknown';
-        
-        return {
-            title: item.name || 'Sin titulo',
-            author: { name: artistName },
-            duration: item.duration || 0,
-            videoId: item.id,
-            thumbnail: thumb,
-            source: 'saavn',
-            _score: item._score
-        };
-    });
-
-    console.log('[youtube-search] DONE, returning', final.length, 'results');
-    if (final.length > 0) {
-        console.log('[youtube-search] Top result:', final[0].title, 'by', final[0].author.name, 'score:', final[0]._score);
-    }
+    const final =scored.slice(0, limit).map(item => ({
+        title: item.name || 'Sin titulo',
+        author: { name: item._artistName || 'Unknown' },
+        duration: item.duration || 0,
+        videoId: item.id,
+        thumbnail: item.image?.find(i => i.quality ==='500x500')?.url || '',
+        source: 'saavn',
+        _score: item._score // Devolvemos el score para que el frontend vea la confianza
+    }));
 
     return res.status(200).json({ success: true, results: final });
 }
