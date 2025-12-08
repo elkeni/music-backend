@@ -183,60 +183,75 @@ const TRASH_WORDS =[
 ];
 
 const PENALTY_WORDS =['cover', 'tribute', 'version', 'remix', 'live', 'en vivo', 'acoustic', 'slowed', 'reverb', 'medley', 'mashup', 'megamix'];
+const ARTIST_BLACKLIST = ['cover', 'tribute', 'karaoke', 'instrumental', 'ringtone'];
 
 function shouldReject(item, artistName) {
-    const title =normalize(item.name || '');
-    const artist =normalize(artistName);
+    const title = normalize(item.name || '');
+    const artist = normalize(artistName);
     
+    // 1.Rechazo por Artista Basura
     for (const trash of TRASH_ARTISTS) {
         if (artist.includes(trash)) return true;
     }
+    
+    // 2.Rechazo por Palabras Prohibidas en Título
     for (const word of TRASH_WORDS) {
         if (title.includes(word)) return true;
     }
-    if ((item.duration || 0) > 900) return true;
+
+    // ⭐ NUEVO: Si el ARTISTA dice explícitamente "Cover" (ej: "Radiohead Cover Band")
+    for (const bad of ARTIST_BLACKLIST) {
+        if (artist.includes(bad)) return true; 
+    }
+
+    if ((item.duration || 0) > 900) return true; // Muy larga
+    if ((item.duration || 0) < 45) return true;  // Muy corta (ringtone)
     
     return false;
 }
 
 function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
-    let score =50;
+    let score = 50;
     
-    const title =normalize(item.name || '');
-    const artist =normalize(targetArtist || ''); // El artista que BUSCAMOS
-    const itemArtist =normalize(item._artistName || ''); // El artista del RESULTADO
-    const duration =item.duration || 0;
+    const title = normalize(item.name || '');
+    const artist = normalize(targetArtist || ''); 
+    const itemArtist = normalize(item._artistName || ''); 
+    const duration = item.duration || 0;
 
-    // 1.COINCIDENCIA DE ARTISTA (CRÍTICO)
-    if (artist && itemArtist) {
-        if (itemArtist.includes(artist) || artist.includes(itemArtist)) {
-            score +=100; // Match fuerte
+    // --- 1.FILTRO DE ARTISTA (CRÍTICO PARA RADIOHEAD) ---
+    if (artist && artist.length > 2) {
+        // Verificamos si hay coincidencia
+        const match = itemArtist.includes(artist) || artist.includes(itemArtist);
+        
+        if (match) {
+            score += 100; // Coincidencia confirmada
         } else {
-            // Si el artista es totalmente diferente, penalización masiva
-            score -=50; 
+            // ⭐ PENALIZACIÓN MORTAL: Si el artista no coincide, matamos el score.
+            // Esto evita que "Creep" de "Scala & Kolacny" suene cuando pides "Radiohead".
+            score -= 200; 
         }
     }
 
-    // 2.COINCIDENCIA DE TÍTULO
-    // Buscamos palabras clave del título original en el resultado
-    const trackWords =normalize(targetTrack || '').split(' ').filter(w => w.length > 2);
-    let wordsFound =0;
+    // --- 2.COINCIDENCIA DE TÍTULO ---
+    const trackWords = normalize(targetTrack || '').split(' ').filter(w => w.length > 2);
+    let wordsFound = 0;
     for (const w of trackWords) {
         if (title.includes(w)) wordsFound++;
     }
-    if (wordsFound ===trackWords.length) score +=40; // Título completo encontrado
-    
-    // 3.FILTRO DE DURACIÓN PREVIO (Si el frontend envió duración)
+    if (wordsFound === trackWords.length) score += 50;
+    else if (wordsFound > 0) score += 20;
+
+    // --- 3.FILTRO DE DURACIÓN ---
     if (targetDuration > 0) {
-        const diff =Math.abs(duration - targetDuration);
-        if (diff <=5) score +=50;       // Exacto
-        else if (diff <=15) score +=30; // Muy cerca
-        else if (diff > 45) score -=100; // Demasiado diferente (probablemente otra versión)
+        const diff = Math.abs(duration - targetDuration);
+        if (diff <= 5) score += 50;       
+        else if (diff <= 15) score += 30; 
+        else if (diff > 45) score -= 50; // Penalización por duración muy distinta
     }
 
-    // 4.PENALIZACIONES ESTÁNDAR
+    // --- 4.PENALIZACIONES DE CALIDAD ---
     for (const word of PENALTY_WORDS) {
-        if (title.includes(word)) score -=40;
+        if (title.includes(word)) score -= 50; // Aumenté la penalización
     }
     
     return score;
