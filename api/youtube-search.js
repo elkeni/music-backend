@@ -226,7 +226,7 @@ function calcScore(item, qWords, detectedArtist, qn, intent) {
         for (const token of detectedArtist.tokens) {
             if (artist.includes(token)) {
                 artistMatchCount++;
-                score += 40; // Bonus por cada token que coincide
+                score += 60; // Bonus por cada token que coincide
             }
         }
         
