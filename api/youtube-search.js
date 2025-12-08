@@ -102,13 +102,13 @@ function calcScore(item, qWords, artist, qn) {
 
 async function searchApi(query, limit) {
     try {
-        const url = SOURCE_API + '/api/search/songs?query=' + encodeURIComponent(query) + '&limit=' + limit;
+        const url =SOURCE_API+'/api/search/songs?query='+encodeURIComponent(query)+'&limit='+ limit;
         console.log('[search] Fetching:', url);
         
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 10000);
         
-        const res = await fetch(url, { signal: ctrl.signal, headers: { 'Accept': 'application/json' } });
+        const res = await fetch(url,{ signal:ctrl.signal, headers:{'Accept':'application/json' } });
         clearTimeout(tid);
         
         if (! res.ok) {
@@ -180,7 +180,7 @@ async function handler(req, res) {
         let thumb = '';
         if (Array.isArray(item.image) && item.image.length > 0) {
             const hq = item.image.find(i => i.quality === '500x500');
-            thumb = hq ? hq.url : (item.image[item.image.length - 1].url || '');
+            thumb = hq?hq.url:(item.image[item.image.length-1].url || '');
         }
         return {
             title: item.name || 'Sin titulo',
