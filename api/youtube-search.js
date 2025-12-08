@@ -184,7 +184,9 @@ async function handler(req, res) {
         }
         return {
             title: item.name || 'Sin titulo',
-            author: { name: item.primaryArtists || 'Unknown' },
+            author: {name:item.primaryArtists || 
+          item.artists?.primary?.map(a => a.name). join(', ') || 
+          'Unknown'},
             duration: item.duration || 0,
             videoId: item.id,
             thumbnail: thumb,
