@@ -233,7 +233,7 @@ function calcScore(item, qWords, detectedArtist, qn, intent) {
         // Si es un artista "strict" y NO coincide, penalizar FUERTEMENTE
         if (detectedArtist.strict && artistMatchCount === 0) {
             // El artista del resultado no coincide con el buscado
-            score -= 150; // Penalización severa
+            score -= 40; // Penalización severa
             console.log(`[calcScore] Strict artist mismatch: buscado="${detectedArtist.name}", encontrado="${artist}"`);
         }
         
