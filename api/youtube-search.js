@@ -16,8 +16,8 @@ const LEET_MAP = { '0':'o', '1':'i', '2':'z', '3':'e', '4':'a', '5':'s', '6':'g'
 function normalize(text) {
     if (!text) return '';
     let r = text.toLowerCase();
-    r = r.normalize('NFD'). replace(/[\u0300-\u036f]/g, '');
-    r = r.split('').map(c => LEET_MAP[c] || c). join('');
+    r = r.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    r = r.split('').map(c => LEET_MAP[c] || c).join('');
     r = r.replace(/&/g, ' ').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
     return r;
 }
@@ -136,7 +136,7 @@ async function handler(req, res) {
     console.log('[youtube-search] START q=' + q);
 
     if (!q) {
-        return res.status(400). json({ success: false, error: 'Missing q' });
+        return res.status(400).json({ success: false, error: 'Missing q' });
     }
 
     const qn = normalize(q);
@@ -145,7 +145,7 @@ async function handler(req, res) {
     
     console.log('[youtube-search] normalized=' + qn + ' artist=' + (artist ? artist.name : 'none'));
 
-    const variations = [q, qn, q.normalize('NFD'). replace(/[\u0300-\u036f]/g, '')];
+    const variations = [q, qn, q.normalize('NFD').replace(/[\u0300-\u036f]/g, '')];
     const unique = [...new Set(variations)];
     
     const all = [];
@@ -161,7 +161,7 @@ async function handler(req, res) {
             seen.add(item.id);
             
             if (shouldReject(item, qn)) {
-                console. log('[youtube-search] REJECT:', item.name);
+                console.log('[youtube-search] REJECT:', item.name);
                 continue;
             }
             
@@ -171,7 +171,7 @@ async function handler(req, res) {
             }
         }
         
-        if (all.filter(x => x._score >= 80). length >= limit) break;
+        if (all.filter(x => x._score >= 80).length >= limit) break;
     }
 
     all.sort((a, b) => b._score - a._score);
@@ -180,7 +180,7 @@ async function handler(req, res) {
         let thumb = '';
         if (Array.isArray(item.image) && item.image.length > 0) {
             const hq = item.image.find(i => i.quality === '500x500');
-            thumb = hq ? hq.url : (item.image[item.image. length - 1].url || '');
+            thumb = hq ? hq.url : (item.image[item.image.length - 1].url || '');
         }
         return {
             title: item.name || 'Sin titulo',
