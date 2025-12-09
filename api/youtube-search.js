@@ -192,56 +192,56 @@ function extractArtistName(item) {
     return rawArtist;
 }
 
-// Artistas conocidos para dar bonus
+// Artistas conocidos para dar bonus (con y sin acentos para búsqueda flexible)
 const KNOWN_ARTISTS = {
-    'mana': ['maná'],
+    'mana': ['mana', 'maná'],
     'radiohead': ['radiohead'],
     'coldplay': ['coldplay'],
-    'ca7riel': ['catriel', 'ca7riel'],
-    'paco amoroso': ['paco', 'amoroso'],
-    'soda stereo': ['soda', 'stereo'],
-    'cerati': ['cerati'],
+    'ca7riel': ['catriel', 'ca7riel', 'c47riel'],
+    'paco amoroso': ['paco amoroso', 'paco', 'amoroso'],
+    'soda stereo': ['soda stereo', 'soda', 'stereo'],
+    'gustavo cerati': ['cerati', 'gustavo cerati'],
     'shakira': ['shakira'],
-    'bad bunny': ['bad bunny'],
-    'daddy yankee': ['daddy yankee'],
+    'bad bunny': ['bad bunny', 'badbunny'],
+    'daddy yankee': ['daddy yankee', 'daddyyankee'],
     'duki': ['duki'],
-    'bizarrap': ['bizarrap', 'bzrp'],
-    'taylor swift': ['taylor swift'],
-    'the weeknd': ['weeknd'],
+    'bizarrap': ['bizarrap', 'bzrp', 'biza'],
+    'taylor swift': ['taylor swift', 'taylor'],
+    'the weeknd': ['weeknd', 'the weeknd'],
     'queen': ['queen'],
     'nirvana': ['nirvana'],
     'metallica': ['metallica'],
-    'guns n roses': ['guns', 'roses'],
-    'pink floyd': ['floyd'],
-    'led zeppelin': ['zeppelin'],
-    'the beatles': ['beatles'],
-    'ac dc': ['acdc', 'ac dc'],
-    'linkin park': ['linkin park'],
-    'green day': ['green day'],
+    'guns n roses': ['guns n roses', 'guns and roses', 'gnr'],
+    'pink floyd': ['pink floyd', 'floyd'],
+    'led zeppelin': ['led zeppelin', 'zeppelin'],
+    'the beatles': ['beatles', 'the beatles'],
+    'ac dc': ['acdc', 'ac dc', 'ac/dc'],
+    'linkin park': ['linkin park', 'linkinpark'],
+    'green day': ['green day', 'greenday'],
     'oasis': ['oasis'],
     'arctic monkeys': ['arctic monkeys'],
     'imagine dragons': ['imagine dragons'],
-    'maroon 5': ['maroon'],
+    'maroon 5': ['maroon 5', 'maroon'],
     'bruno mars': ['bruno mars'],
-    'ed sheeran': ['sheeran'],
+    'ed sheeran': ['ed sheeran', 'sheeran'],
     'adele': ['adele'],
     'rihanna': ['rihanna'],
-    'beyonce': ['beyonce'],
+    'beyonce': ['beyonce', 'beyoncé'],
     'drake': ['drake'],
     'eminem': ['eminem'],
-    'kendrick lamar': ['kendrick'],
-    'kanye west': ['kanye'],
+    'kendrick lamar': ['kendrick lamar', 'kendrick'],
+    'kanye west': ['kanye west', 'kanye', 'ye'],
     'travis scott': ['travis scott'],
     'post malone': ['post malone'],
     'dua lipa': ['dua lipa'],
-    'billie eilish': ['billie', 'eilish'],
+    'billie eilish': ['billie eilish', 'billie', 'eilish'],
     'harry styles': ['harry styles'],
-    'ariana grande': ['ariana'],
-    'justin bieber': ['bieber'],
+    'ariana grande': ['ariana grande', 'ariana'],
+    'justin bieber': ['justin bieber', 'bieber'],
     'selena gomez': ['selena gomez'],
     'katy perry': ['katy perry'],
-    'lady gaga': ['gaga'],
-    'miley cyrus': ['miley'],
+    'lady gaga': ['lady gaga', 'gaga'],
+    'miley cyrus': ['miley cyrus', 'miley'],
     'sia': ['sia'],
     'lana del rey': ['lana del rey'],
     'hozier': ['hozier'],
@@ -251,25 +251,41 @@ const KNOWN_ARTISTS = {
     'deadmau5': ['deadmau5'],
     'skrillex': ['skrillex'],
     'calvin harris': ['calvin harris'],
-    'david guetta': ['guetta'],
+    'david guetta': ['david guetta', 'guetta'],
     'avicii': ['avicii'],
     'marshmello': ['marshmello'],
-    'j balvin': ['balvin'],
+    'j balvin': ['j balvin', 'balvin'],
     'ozuna': ['ozuna'],
     'maluma': ['maluma'],
-    'anuel aa': ['anuel'],
-    'karol g': ['karol'],
-    'rauw alejandro': ['rauw'],
+    'anuel aa': ['anuel aa', 'anuel'],
+    'karol g': ['karol g', 'karol'],
+    'rauw alejandro': ['rauw alejandro', 'rauw'],
     'feid': ['feid'],
     'myke towers': ['myke towers'],
     'grupo 5': ['grupo 5'],
-    'los angeles azules': ['angeles azules'],
-    'hector lavoe': ['lavoe'],
-    'willie colon': ['colon'],
+    'los angeles azules': ['los angeles azules', 'angeles azules'],
+    'hector lavoe': ['hector lavoe', 'lavoe', 'héctor lavoe'],
+    'willie colon': ['willie colon', 'willie colón', 'colon', 'colón'],
     'marc anthony': ['marc anthony'],
-    'juan gabriel': ['juan gabriel'],
+    'juan gabriel': ['juan gabriel', 'juanga'],
     'luis miguel': ['luis miguel'],
-    'jose jose': ['jose jose']
+    'jose jose': ['jose jose', 'josé josé'],
+    'vicente fernandez': ['vicente fernandez', 'vicente fernández', 'chente'],
+    'ricardo arjona': ['arjona', 'ricardo arjona'],
+    'juanes': ['juanes'],
+    'carlos vives': ['carlos vives', 'vives'],
+    'alejandro sanz': ['alejandro sanz', 'sanz'],
+    'enrique iglesias': ['enrique iglesias', 'enrique'],
+    'natalia lafourcade': ['natalia lafourcade', 'lafourcade'],
+    'mon laferte': ['mon laferte'],
+    'residente': ['residente', 'calle 13'],
+    'bad gyal': ['bad gyal'],
+    'rosalia': ['rosalia', 'rosalía'],
+    'c tangana': ['c tangana', 'tangana'],
+    'peso pluma': ['peso pluma'],
+    'fuerza regida': ['fuerza regida'],
+    'grupo frontera': ['grupo frontera'],
+    'junior h': ['junior h']
 };
 
 function detectArtist(query) {
@@ -414,6 +430,19 @@ function checkArtistMatch(target, currentOrList, item = null) {
     const uniqueMatches = Math.min(matches, targetTokens.length);
 
     if (uniqueMatches >= targetTokens.length) return 'exact';
+
+    // ⭐ NUEVO: Ser más flexible - si encontramos al menos 1 match y es una sola palabra
+    // Ejemplo: buscar "Ca7riel" en "Ca7riel & Paco Amoroso" = exact
+    if (targetTokens.length === 1 && uniqueMatches >= 1) {
+        return 'exact';
+    }
+
+    // ⭐ NUEVO: Si encontramos la mayoría de tokens, es exact (no partial)
+    // Esto ayuda con "Paco Amoroso" en "Ca7riel, Paco Amoroso"
+    if (uniqueMatches > 0 && uniqueMatches >= (targetTokens.length * 0.7)) {
+        return 'exact';
+    }
+
     if (uniqueMatches > 0 && uniqueMatches >= (targetTokens.length / 2)) return 'partial';
 
     return 'none';
@@ -501,6 +530,35 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
     // ⭐ NUEVO: Bonus extra si el título limpio coincide exactamente
     if (trackWords.length > 0 && title === normalize(targetTrackClean)) {
         score += 30;  // Match exacto de título
+    }
+
+    // --- 2.5 ⭐ NUEVO: BONUS DE ÁLBUM ---
+    // Si el usuario busca por nombre de álbum (ej: "Ca7riel Baño Maria"),
+    // las canciones de ese álbum deben recibir puntos aunque el título no coincida.
+    if (albumName && trackWords.length > 0) {
+        let albumWordsFound = 0;
+        for (const w of trackWords) {
+            if (albumName.includes(w)) albumWordsFound++;
+        }
+
+        // Si encontramos palabras de la query en el nombre del álbum
+        if (albumWordsFound >= trackWords.length && trackWords.length > 0) {
+            score += 80;  // ¡El álbum coincide perfectamente! (Caso: buscar "Baño Maria")
+        } else if (albumWordsFound > 0 && albumWordsFound >= trackWords.length / 2) {
+            score += 40;  // Match parcial del álbum
+        }
+    }
+
+    // También buscar en qWords (la query completa) por si no viene targetTrack separado
+    if (albumName && qWords.length > 0) {
+        let qWordsInAlbum = 0;
+        for (const w of qWords) {
+            if (albumName.includes(w)) qWordsInAlbum++;
+        }
+        // Si más de la mitad de las palabras de la query están en el álbum
+        if (qWordsInAlbum > qWords.length / 2) {
+            score += 30;  // Bonus adicional por coincidencia query-álbum
+        }
     }
 
     // --- 3. FILTRO DE DURACIÓN (Tolerancia Ampliada) ---
