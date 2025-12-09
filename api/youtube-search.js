@@ -518,7 +518,13 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
     let wordsFound = 0;
     for (const w of trackWords) {
         // Buscar en título limpio (sin sufijos)
-        if (title.includes(w)) wordsFound++;
+        if (title.includes(w)) {
+            wordsFound++;
+        } else if (itemArtist.includes(w)) {
+            // ⭐ FIX GORILLAZ + DE LA SOUL: Si la palabra no está en el título,
+            // verificar si está en el nombre del artista (colaboradores)
+            wordsFound++;
+        }
     }
 
     if (wordsFound === trackWords.length && trackWords.length > 0) {
