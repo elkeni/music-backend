@@ -591,6 +591,38 @@ function checkArtistMatchInTitle(targetArtist, title) {
     return 'none';
 }
 
+/**
+ * ⭐ NUEVO: Detecta si la query contiene un artista conocido y lo extrae
+ * Ejemplo: "mana rayando el sol" → { artist: "mana", track: "rayando el sol" }
+ * @param {string} query - Query completa del usuario
+ * @returns {{ artist: string|null, track: string }}
+ */
+function detectAndExtractArtist(query) {
+    const qNorm = normalize(query);
+    let bestMatch = null;
+    let bestMatchLength = 0;
+    let cleanQuery = query;
+
+    // Buscar en KNOWN_ARTISTS primero (prioridad máxima)
+    for (const [realName, aliases] of Object.entries(KNOWN_ARTISTS)) {
+        for (const alias of aliases) {
+            // Buscamos el alias como palabra completa
+            const regex = new RegExp(`\\b${alias}\\b`, 'i');
+            if (regex.test(qNorm)) {
+                // Si encontramos el artista, guardamos el más largo (más específico)
+                if (!bestMatch || alias.length > bestMatchLength) {
+                    bestMatch = realName;
+                    bestMatchLength = alias.length;
+                    // Quitamos el nombre del artista de la query para buscar solo la canción
+                    cleanQuery = query.replace(new RegExp(alias, 'gi'), '').replace(/\s+/g, ' ').trim();
+                }
+            }
+        }
+    }
+
+    return { artist: bestMatch, track: cleanQuery };
+}
+
 async function searchApi(query, limit) {
     try {
         const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=${limit}`;
@@ -619,22 +651,42 @@ async function searchApi(query, limit) {
 }
 
 async function handler(req, res) {
-    // Recibir parámetros explícitos
-    const q = req.query.q || req.query.query || '';
-    const targetArtist = req.query.artist || '';
-    const targetTrack = req.query.track || '';
+    const qRaw = req.query.q || req.query.query || '';
+    let targetArtist = req.query.artist || '';
+    let targetTrack = req.query.track || '';
     const targetDuration = parseInt(req.query.duration) || 0;
     const limit = parseInt(req.query.limit) || 10;
 
-    if (!q) return res.status(400).json({ success: false, error: 'Missing q' });
+    if (!qRaw) return res.status(400).json({ success: false, error: 'Missing q' });
 
-    console.log(`[backend] Searching: "${q}"| Target: ${targetArtist} - ${targetTrack} (${targetDuration}s)`);
+    // ⭐ NUEVO: INTELIGENCIA - Si no me dan artista explícito, intento detectarlo en la query
+    let searchQ = qRaw;
+    if (!targetArtist) {
+        const detected = detectAndExtractArtist(qRaw);
+        if (detected.artist) {
+            console.log(`[SmartSearch] Detected Artist: "${detected.artist}" | Track: "${detected.track}"`);
+            targetArtist = detected.artist;
+            targetTrack = detected.track || targetTrack;
+
+            // TRUCO: A veces es mejor buscar "Artista + Cancion" en la API para mejores resultados,
+            // pero usar el targetArtist separado para el filtrado interno.
+            // Si la query quedó vacía (usuario solo buscó "Mana"), buscamos al artista.
+            if (!detected.track || detected.track.length < 2) {
+                searchQ = qRaw; // Mantener la query original
+            } else {
+                // Buscar con artista + canción para mejores resultados de API
+                searchQ = `${detected.artist} ${detected.track}`;
+            }
+        }
+    }
+
+    console.log(`[backend] Searching: "${searchQ}" | Target Artist: "${targetArtist}" | Track: "${targetTrack}" (${targetDuration}s)`);
 
     // Usar la API externa (limitamos a 25 para ser rápidos pero tener variedad)
-    const results = await searchApi(q, 25);
+    const results = await searchApi(searchQ, 25);
 
     const scored = [];
-    const qWords = normalize(q).split(' ').filter(w => w.length > 1);
+    const qWords = normalize(searchQ).split(' ').filter(w => w.length > 1);
 
     for (const item of results) {
         const artistName = extractArtistName(item);
@@ -642,7 +694,7 @@ async function handler(req, res) {
 
         if (shouldReject(item, artistName)) continue;
 
-        // Pasar los datos exactos al score
+        // Pasar los datos exactos al score (ahora con artista detectado)
         const score = calcScore(item, qWords, targetArtist, targetTrack, targetDuration);
 
         if (score > 0) {
