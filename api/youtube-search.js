@@ -446,25 +446,39 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
     const duration = item.duration || 0;
     const albumName = normalize(item.album?.name || item.album || '');
 
-    // --- 1. FILTRO DE ARTISTA INTELIGENTE ---
+    // --- 1. FILTRO DE ARTISTA INTELIGENTE (VERSIÓN CORREGIDA) ---
     if (targetArtist && targetArtist.length > 1) {
-        // ⭐ NUEVO: Pasar el item para usar _artistList
         const matchType = checkArtistMatch(targetArtist, itemArtist, item);
 
         if (matchType === 'exact') {
-            score += 100; // ¡Es el artista correcto!
+            score += 150; // SUBIMOS EL BONUS: Si es el artista exacto, gana seguro.
         } else if (matchType === 'partial') {
-            score += 50;  // Es probablemente el artista (ej: Feat, o solo un miembro)
+            score += 50;
         } else {
-            // ⭐ NUEVO: Buscar el artista en el título (caso "feat. Julian Casablancas")
+            // AQUÍ ESTÁ EL FIX PARA "AIDEN YOO":
+            // Buscamos el artista en el título...
             const artistInTitle = checkArtistMatchInTitle(targetArtist, rawTitle);
-            if (artistInTitle === 'exact') {
-                score += 80;  // Artista encontrado en el título como featuring
-            } else if (artistInTitle === 'partial') {
-                score += 30;
+
+            if (artistInTitle === 'exact' || artistInTitle === 'partial') {
+                // PERO... solo confiamos si el título tiene "feat", "ft", "with" 
+                // O si el autor original no es sospechoso.
+
+                // Si el título dice "Radiohead Creep" pero el autor es "Aiden Yoo", es un cover.
+                // Verificamos si parece un título de "Artista - Canción"
+                if (rawTitle.includes('-') || rawTitle.includes(':')) {
+                    score -= 20; // Probablemente es "Artista Original - Canción (Cover por X)"
+                } else {
+                    // Si solo dice "Radiohead Creep" y el autor es desconocido, penalizamos
+                    // a menos que sea un feat explícito.
+                    const isFeat = /feat|ft\.|featuring|with/i.test(rawTitle);
+                    if (isFeat) {
+                        score += 80; // Es un feat legítimo
+                    } else {
+                        score -= 50; // Es un cover camuflado (Caso Aiden Yoo)
+                    }
+                }
             } else {
-                // Penalización suave: Si el título es MUY bueno, aún podría salvarse.
-                score -= 50;
+                score -= 50; // No está el artista ni en autor ni en título
             }
         }
     }
