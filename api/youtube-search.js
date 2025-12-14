@@ -314,24 +314,100 @@ const TRASH_WORDS = [
     'lullaby', 'para bebes', 'tutorial', 'lesson'
 ];
 
-const PENALTY_WORDS = ['cover', 'tribute', 'version', 'remix', 'live', 'en vivo', 'acoustic', 'slowed', 'reverb', 'medley', 'mashup', 'megamix'];
-const ARTIST_BLACKLIST = ['cover', 'tribute', 'karaoke', 'instrumental', 'ringtone'];
+/**
+ * ⭐ HARD REJECT PATTERNS: Patrones que NUNCA deben aparecer en resultados
+ * Estos son covers camuflados y contenido no original que deben rechazarse
+ */
+const HARD_REJECT_PATTERNS = [
+    'in the style of',
+    'style of',
+    'performance track',
+    'demonstration vocals',
+    'backing track',
+    'karaoke version',
+    'karaoke instrumental',
+    'originally performed by',
+    'as made famous by',
+    'in style of',
+    'instrumental version karaoke',
+    'sing along',
+    'playback',
+    'pista musical'
+];
+
+/**
+ * ⭐ COVER INDICATOR PATTERNS: Patrones que indican que NO es una colaboración real
+ * Si estos aparecen, NO se debe hacer fallback al título para matching de artista
+ */
+const COVER_INDICATOR_PATTERNS = [
+    'in the style of',
+    'style of',
+    'tribute to',
+    'tribute',
+    'cover of',
+    'cover version',
+    'covered by',
+    'homage to',
+    'interpretado por',
+    'version de',
+    'homenaje a'
+];
+
+/**
+ * ⭐ FEAT INDICATOR PATTERNS: Patrones que indican colaboración REAL
+ * Solo si estos aparecen se permite el fallback al título
+ */
+const FEAT_INDICATOR_PATTERNS = [
+    'feat', 'feat.', 'ft', 'ft.', 'featuring', 'with', 'prod by', 'prod.',
+    'x ', ' x ', ' & ', ',', 'and ', ' y '
+];
+
+/**
+ * ⭐ CONDITIONAL PENALTIES: Penalizaciones que dependen de la intención del usuario
+ * Si el usuario busca explícitamente "remix", no se penaliza
+ */
+const CONDITIONAL_PENALTIES = {
+    'remix': 45,
+    'live': 35,
+    'en vivo': 35,
+    'acoustic': 30,
+    'acustico': 30,
+    'radio edit': 20,
+    'extended': 20,
+    'version': 15
+};
+
+/**
+ * ⭐ ALWAYS_PENALTY_WORDS: Palabras que SIEMPRE penalizan (no dependen de intención)
+ */
+const ALWAYS_PENALTY_WORDS = ['cover', 'tribute', 'slowed', 'reverb', 'medley', 'mashup', 'megamix', 'sped up', 'chipmunk'];
+const ARTIST_BLACKLIST = ['cover', 'tribute', 'karaoke', 'instrumental', 'ringtone', 'style of'];
 
 function shouldReject(item, artistName) {
     const title = normalize(item.name || '');
+    const rawTitle = (item.name || '').toLowerCase();
     const artist = normalize(artistName);
 
-    // 1.Rechazo por Artista Basura
+    // 1. ⭐ NUEVO: Rechazo DURO por patrones de covers camuflados
+    // Estos NUNCA deben pasar, sin importar el score
+    for (const pattern of HARD_REJECT_PATTERNS) {
+        if (rawTitle.includes(pattern)) {
+            console.log(`[HARD_REJECT] Pattern "${pattern}" found in: "${item.name}"`);
+            return true;
+        }
+    }
+
+    // 2. Rechazo por Artista Basura
     for (const trash of TRASH_ARTISTS) {
         if (artist.includes(trash)) return true;
     }
 
-    // 2.Rechazo por Palabras Prohibidas en Título
+    // 3. Rechazo por Palabras Prohibidas en Título
     for (const word of TRASH_WORDS) {
         if (title.includes(word)) return true;
     }
 
-    // ⭐ NUEVO: Si el ARTISTA dice explícitamente "Cover" (ej: "Radiohead Cover Band")
+    // 4. ⭐ MEJORADO: Si el ARTISTA contiene palabras de blacklist
     for (const bad of ARTIST_BLACKLIST) {
         if (artist.includes(bad)) return true;
     }
@@ -449,24 +525,28 @@ function checkArtistMatch(target, currentOrList, item = null) {
 }
 
 /**
- * ⭐ MEJORADO: Calcula el score de un resultado con:
+ * ⭐ MEJORADO v2: Calcula el score de un resultado con:
  * - Limpieza de títulos para mejor comparación
  * - Detección de featuring/colaboradores en el título
  * - Penalización de compilaciones (Greatest Hits, Best Of)
  * - Priorización de versiones de álbum original
+ * - ⭐ NUEVO: Penalizaciones condicionales según intención del usuario
+ * - ⭐ NUEVO: Detección estricta de covers camuflados
  * 
  * @param {object} item - Resultado de la API
  * @param {string[]} qWords - Palabras de la query normalizada
  * @param {string} targetArtist - Artista buscado
  * @param {string} targetTrack - Canción buscada
  * @param {number} targetDuration - Duración esperada
+ * @param {string} rawQuery - ⭐ NUEVO: Query original para detectar intención
  * @returns {number} Score final
  */
-function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
+function calcScore(item, qWords, targetArtist, targetTrack, targetDuration, rawQuery = '') {
     let score = 50;
 
     const rawTitle = item.name || '';
-    const cleanedTitle = cleanTitle(rawTitle);  // ⭐ NUEVO: Título limpio
+    const rawTitleLower = rawTitle.toLowerCase();
+    const cleanedTitle = cleanTitle(rawTitle);  // Título limpio
     const title = normalize(cleanedTitle);
     const rawTitleNorm = normalize(rawTitle);
 
@@ -475,35 +555,56 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
     const duration = item.duration || 0;
     const albumName = normalize(item.album?.name || item.album || '');
 
-    // --- 1. FILTRO DE ARTISTA INTELIGENTE (VERSIÓN CORREGIDA) ---
+    // ⭐ NUEVO: Normalizar la query para detectar intención del usuario
+    const queryLower = (rawQuery || '').toLowerCase();
+    const queryNorm = normalize(rawQuery || '');
+
+    // --- 0. ⭐ NUEVO: DETECCIÓN DE COVER PATTERNS EN TÍTULO ---
+    // Si el título contiene indicadores de cover, marcar para penalización severa
+    let isCoverIndicator = false;
+    for (const pattern of COVER_INDICATOR_PATTERNS) {
+        if (rawTitleLower.includes(pattern)) {
+            isCoverIndicator = true;
+            break;
+        }
+    }
+
+    // --- 1. FILTRO DE ARTISTA INTELIGENTE (VERSIÓN MEJORADA v2) ---
     if (targetArtist && targetArtist.length > 1) {
         const matchType = checkArtistMatch(targetArtist, itemArtist, item);
 
         if (matchType === 'exact') {
-            score += 150; // SUBIMOS EL BONUS: Si es el artista exacto, gana seguro.
+            score += 150; // Si es el artista exacto, gana seguro.
         } else if (matchType === 'partial') {
             score += 50;
         } else {
-            // AQUÍ ESTÁ EL FIX PARA "AIDEN YOO":
-            // Buscamos el artista en el título...
+            // ⭐ MEJORADO: El artista NO coincide, buscamos en el título...
             const artistInTitle = checkArtistMatchInTitle(targetArtist, rawTitle);
 
             if (artistInTitle === 'exact' || artistInTitle === 'partial') {
-                // PERO... solo confiamos si el título tiene "feat", "ft", "with" 
-                // O si el autor original no es sospechoso.
-
-                // Si el título dice "Radiohead Creep" pero el autor es "Aiden Yoo", es un cover.
-                // Verificamos si parece un título de "Artista - Canción"
-                if (rawTitle.includes('-') || rawTitle.includes(':')) {
-                    score -= 20; // Probablemente es "Artista Original - Canción (Cover por X)"
+                // ⭐ NUEVO: Verificar si es un COVER CAMUFLADO
+                // Si tiene indicadores de cover, RECHAZAR el fallback al título
+                if (isCoverIndicator) {
+                    score -= 150; // Penalización SEVERA: Es un cover camuflado
+                    console.log(`[COVER_DETECTED] "${rawTitle}" - Cover indicator + artist mismatch`);
                 } else {
-                    // Si solo dice "Radiohead Creep" y el autor es desconocido, penalizamos
-                    // a menos que sea un feat explícito.
-                    const isFeat = /feat|ft\.|featuring|with/i.test(rawTitle);
-                    if (isFeat) {
+                    // Solo confiamos si el título tiene indicadores de colaboración REAL
+                    let hasRealCollab = false;
+                    for (const pattern of FEAT_INDICATOR_PATTERNS) {
+                        if (rawTitleLower.includes(pattern.toLowerCase())) {
+                            hasRealCollab = true;
+                            break;
+                        }
+                    }
+
+                    if (hasRealCollab) {
                         score += 80; // Es un feat legítimo
+                    } else if (rawTitle.includes('-') || rawTitle.includes(':')) {
+                        // Formato "Artista - Canción" sin feat = probablemente cover
+                        score -= 80;
                     } else {
-                        score -= 50; // Es un cover camuflado (Caso Aiden Yoo)
+                        // El artista está en el título pero sin indicadores = cover
+                        score -= 100;
                     }
                 }
             } else {
@@ -521,24 +622,24 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
         if (title.includes(w)) {
             wordsFound++;
         } else if (itemArtist.includes(w)) {
-            // ⭐ FIX GORILLAZ + DE LA SOUL: Si la palabra no está en el título,
+            // FIX GORILLAZ + DE LA SOUL: Si la palabra no está en el título,
             // verificar si está en el nombre del artista (colaboradores)
             wordsFound++;
         }
     }
 
     if (wordsFound === trackWords.length && trackWords.length > 0) {
-        score += 60;  // ⭐ Bonus mayor por match perfecto de título
+        score += 60;  // Bonus mayor por match perfecto de título
     } else if (wordsFound > 0) {
         score += 10 + (wordsFound * 10);  // Bonus proporcional
     }
 
-    // ⭐ NUEVO: Bonus extra si el título limpio coincide exactamente
+    // Bonus extra si el título limpio coincide exactamente
     if (trackWords.length > 0 && title === normalize(targetTrackClean)) {
         score += 30;  // Match exacto de título
     }
 
-    // --- 2.5 ⭐ NUEVO: BONUS DE ÁLBUM ---
+    // --- 2.5 BONUS DE ÁLBUM ---
     // Si el usuario busca por nombre de álbum (ej: "Ca7riel Baño Maria"),
     // las canciones de ese álbum deben recibir puntos aunque el título no coincida.
     if (albumName && trackWords.length > 0) {
@@ -577,18 +678,39 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
         else if (diff > 60) score -= 30;
     }
 
-    // --- 4. PENALIZACIONES DE CALIDAD ---
-    for (const word of PENALTY_WORDS) {
-        // Penalizamos "live", "cover", etc.
-        if (rawTitleNorm.includes(word)) score -= 35;
+    // --- 4. ⭐ PENALIZACIONES DE CALIDAD (MEJORADO v2) ---
+
+    // 4.1 Penalizaciones que SIEMPRE aplican (no dependen de intención)
+    for (const word of ALWAYS_PENALTY_WORDS) {
+        if (rawTitleNorm.includes(word)) {
+            score -= 40;
+        }
     }
 
-    // Rechazo extra para covers explícitos en el artista
+    // 4.2 ⭐ NUEVO: Penalizaciones CONDICIONALES según intención del usuario
+    // Solo penalizamos "remix", "live", etc. si el usuario NO los buscó
+    for (const [word, penalty] of Object.entries(CONDITIONAL_PENALTIES)) {
+        const wordNorm = normalize(word);
+        const resultHasWord = rawTitleNorm.includes(wordNorm);
+        const userRequestedWord = queryNorm.includes(wordNorm);
+
+        if (resultHasWord) {
+            if (userRequestedWord) {
+                // ⭐ El usuario SÍ pidió esto explícitamente → BONUS en lugar de penalización
+                score += 25;  // Bonus por coincidencia de intención
+            } else {
+                // El usuario NO pidió esto → penalizar
+                score -= penalty;
+            }
+        }
+    }
+
+    // 4.3 Rechazo extra para covers explícitos en el artista
     if (itemArtist.includes('cover') || itemArtist.includes('tribute')) {
         score -= 100;
     }
 
-    // --- 5. ⭐ NUEVO: PRIORIDAD ÁLBUM vs COMPILACIÓN ---
+    // --- 5. PRIORIDAD ÁLBUM vs COMPILACIÓN ---
     // Penalizar compilaciones para evitar duplicados
     const compilationPatterns = [
         'greatest hits', 'best of', 'the essential', 'gold collection',
@@ -616,7 +738,7 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
         }
     }
 
-    // --- 6. ⭐ NUEVO: BONUS POR FEATURING DETECTADO EN QUERY ---
+    // --- 6. BONUS POR FEATURING DETECTADO EN QUERY ---
     // Si el usuario buscó "Daft Punk Julian Casablancas" y Julian está en el feat., bonus
     if (targetArtist) {
         const searchArtists = splitArtists(targetArtist);
@@ -631,6 +753,14 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration) {
                 }
             }
         }
+    }
+
+    // --- 7. ⭐ NUEVO: PENALIZACIÓN POR THUMBNAIL FALTANTE ---
+    // Si no tiene thumbnail válido, penalizar para UX del frontend
+    const thumbnail = item.image?.find(i => i.quality === '500x500')?.url ||
+        item.image?.[0]?.url || '';
+    if (!thumbnail || thumbnail.length < 10) {
+        score -= 30;  // Penalización moderada por falta de imagen
     }
 
     return score;
@@ -772,8 +902,8 @@ async function handler(req, res) {
 
         if (shouldReject(item, artistName)) continue;
 
-        // Pasar los datos exactos al score (ahora con artista detectado)
-        const score = calcScore(item, qWords, targetArtist, targetTrack, targetDuration);
+        // Pasar los datos exactos al score (ahora con artista detectado + query original para intención)
+        const score = calcScore(item, qWords, targetArtist, targetTrack, targetDuration, qRaw);
 
         if (score > 0) {
             item._score = score;

@@ -48,7 +48,7 @@ async function handler(req, res) {
         }
 
         const data = await response.json();
-        
+
         // ✅ ESTRUCTURA CORRECTA: data.data[0]
         const songData = data.data?.[0] || data.data || data;
 
