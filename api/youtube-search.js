@@ -697,7 +697,7 @@ function calcScore(item, qWords, targetArtist, targetTrack, targetDuration, rawQ
         if (resultHasWord) {
             if (userRequestedWord) {
                 // ⭐ El usuario SÍ pidió esto explícitamente → BONUS en lugar de penalización
-                score += 25;  // Bonus por coincidencia de intención
+                score += 45;  // Bonus por coincidencia de intención
             } else {
                 // El usuario NO pidió esto → penalizar
                 score -= penalty;
