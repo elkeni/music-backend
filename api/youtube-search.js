@@ -1,4 +1,51 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 🎵 MUSIC SEARCH ENGINE v3.2 - STUDIO QUALITY ONLY
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * VISIÓN DEL PRODUCTO:
+ * - SOLO música de estudio de calidad
+ * - Singles, álbumes y EPs oficiales
+ * - Remixes oficiales SÍ son válidos
+ * - Remasters oficiales SÍ son válidos
+ * 
+ * VERSIONES PROHIBIDAS (RECHAZO INMEDIATO):
+ * - live, acoustic, unplugged, cover, karaoke
+ * - instrumental, sped up, slowed, nightcore, tribute
+ * 
+ * REGLA DE ORO:
+ * Si la canción NO es de estudio → NO devolver
+ * Si la canción ES de estudio correcta → SIEMPRE devolver
+ * 
+ * REGLA CLAVE v3.2:
+ * El uploader del video NO define la validez del track.
+ * La identidad musical SÍ.
+ * Un track es válido si:
+ * - artistScore >= 0.8 AND titleScore >= 0.7 AND durationScore >= 0.8
+ * - NO es versión prohibida
+ * - Duración <= 15 min (no album-mix)
+ */
+
 const SOURCE_API = 'https://appmusic-phi.vercel.app';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CACHE EN MEMORIA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Cache estándar (24 horas)
+const searchCache = new Map();
+const CACHE_TTL = 1000 * 60 * 60 * 24; // 24 horas
+const MIN_CONFIDENCE_TO_CACHE = 0.7; // Solo cachear resultados confiables
+
+// ❄️ FROZEN DECISIONS: Cache de muy largo plazo para resultados con alta confianza
+// Bypassea completamente el motor de búsqueda
+const frozenDecisions = new Map();
+const FREEZE_TTL = 1000 * 60 * 60 * 24 * 30; // 30 días
+const MIN_CONFIDENCE_TO_FREEZE = 0.85; // Solo congelar resultados muy confiables
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORS MIDDLEWARE
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const allowCors = (fn) => async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -11,10 +58,16 @@ const allowCors = (fn) => async (req, res) => {
     return await fn(req, res);
 };
 
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UTILIDADES DE NORMALIZACIÓN
+// ═══════════════════════════════════════════════════════════════════════════════
+
 const LEET_MAP = { '0': 'o', '1': 'i', '2': 'z', '3': 'e', '4': 'a', '5': 's', '6': 'g', '7': 't', '8': 'b', '9': 'g' };
 
 /**
- * ⭐ NORMALIZACIÓN BÁSICA: Convierte texto a minúsculas, elimina acentos y leetspeak
+ * Normaliza texto: minúsculas, sin acentos, sin leetspeak
  */
 function normalize(text) {
     if (!text) return '';
@@ -26,15 +79,26 @@ function normalize(text) {
 }
 
 /**
- * ⭐ NUEVO: Limpia sufijos comunes de títulos para mejor comparación
- * Remueve: (Official Video), [HQ], (Lyrics), (Audio), (Remastered), etc.
+ * Construye clave de cache basada en identidad normalizada
+ * Evita duplicados por mayúsculas, queries ligeramente distintas, etc.
+ */
+function buildCacheKey({ title, artist, duration }) {
+    return [
+        normalize(title || ''),
+        normalize(artist || ''),
+        Math.round(duration || 0)
+    ].join('|');
+}
+
+/**
+ * Limpia sufijos comunes de títulos (Official Video, Lyrics, etc.)
+ * NO elimina remix/remaster porque son válidos
  */
 function cleanTitle(text) {
     if (!text) return '';
     let clean = text;
 
-    // Patrones entre paréntesis que son ruido
-    const parenPatterns = [
+    const noisePatterns = [
         /\(official\s*(music\s*)?video\)/gi,
         /\(official\s*audio\)/gi,
         /\(official\)/gi,
@@ -42,157 +106,294 @@ function cleanTitle(text) {
         /\(audio\s*(oficial)?\)/gi,
         /\(video\s*(oficial|clip)?\)/gi,
         /\(hd|hq|4k|1080p?\)/gi,
-        /\(remaster(ed)?\s*\d*\)/gi,
         /\(explicit\)/gi,
         /\(clean\s*version\)/gi,
-        /\(from\s+[^)]+\)/gi,  // (from Movie Name)
-        /\(\d{4}\s*(remaster)?\)/gi,  // (2020 Remaster)
-        /\(radio\s*edit\)/gi,
-        /\(single\s*version\)/gi,
-        /\(album\s*version\)/gi,
-        /\(extended\s*(mix|version)?\)/gi,
-    ];
-
-    // Patrones entre corchetes
-    const bracketPatterns = [
+        /\(from\s+[^)]+\)/gi,
         /\[official\s*(music\s*)?video\]/gi,
         /\[hd|hq|4k\]/gi,
         /\[lyrics?\]/gi,
         /\[audio\]/gi,
         /\[explicit\]/gi,
-        /\[remaster(ed)?\]/gi,
     ];
 
-    for (const pattern of parenPatterns) {
-        clean = clean.replace(pattern, '');
-    }
-    for (const pattern of bracketPatterns) {
+    for (const pattern of noisePatterns) {
         clean = clean.replace(pattern, '');
     }
 
-    // Limpiar espacios múltiples
     return clean.replace(/\s+/g, ' ').trim();
 }
 
 /**
- * ⭐ NUEVO: Extrae artistas colaboradores del título
- * Detecta patrones como: "feat.", "ft.", "featuring", "with", "x", "&"
- * Retorna array de nombres de artistas encontrados en el título
- */
-function extractFeaturingFromTitle(title) {
-    if (!title) return [];
-
-    const featuring = [];
-    const normalTitle = title.toLowerCase();
-
-    // Patrones de featuring con captura
-    const patterns = [
-        /\(?feat\.?\s+([^)(\[\]]+)\)?/gi,
-        /\(?ft\.?\s+([^)(\[\]]+)\)?/gi,
-        /\(?featuring\s+([^)(\[\]]+)\)?/gi,
-        /\(?with\s+([^)(\[\]]+)\)?/gi,
-        /\(?prod\.?\s*(by)?\s+([^)(\[\]]+)\)?/gi,
-    ];
-
-    for (const pattern of patterns) {
-        let match;
-        while ((match = pattern.exec(normalTitle)) !== null) {
-            // El último grupo capturado contiene el nombre
-            const artistPart = match[match.length - 1] || match[1];
-            if (artistPart) {
-                // Puede haber múltiples artistas separados por , o &
-                const artists = artistPart.split(/[,&]/).map(a => a.trim()).filter(a => a.length > 1);
-                featuring.push(...artists);
-            }
-        }
-    }
-
-    return featuring;
-}
-
-/**
- * ⭐ NUEVO: Divide un string de artistas en artistas individuales
- * "Shakira, Alejandro Sanz" → ["shakira", "alejandro sanz"]
- * "Daft Punk & Pharrell Williams" → ["daft punk", "pharrell williams"]
+ * Divide string de artistas en array individual
  */
 function splitArtists(artistString) {
     if (!artistString) return [];
-
-    // Separadores comunes entre artistas
     const separators = /[,&]|\s+(?:and|y|feat\.?|ft\.?|featuring|with|x)\s+/gi;
-
     return artistString
         .split(separators)
         .map(a => normalize(a))
         .filter(a => a.length > 1);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// VERSIONES PROHIBIDAS (RECHAZO INMEDIATO - NO NEGOCIABLE)
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /**
- * ⭐ MEJORADO: Extrae el nombre del artista de múltiples campos posibles
- * Ahora también almacena la lista de artistas individuales para mejor matching
+ * Patrones de versiones que NUNCA deben devolverse
+ * Si se detecta cualquiera de estos → RECHAZO INMEDIATO
+ * 
+ * EXCEPCIONES (ruido editorial, NO versiones):
+ * - "official audio", "official video", "oficial" → IGNORAR
+ * - "remaster", "remastered" → SIEMPRE VÁLIDO
+ * - "remix" → Válido si identidad es fuerte (se evalúa después)
  */
+const FORBIDDEN_VERSION_PATTERNS = [
+    // Live versions
+    { pattern: /\blive\b/i, name: 'live' },
+    { pattern: /\ben\s*vivo\b/i, name: 'en vivo' },
+    { pattern: /\bconcierto\b/i, name: 'concierto' },
+    { pattern: /\bconcert\b/i, name: 'concert' },
+    { pattern: /\blive\s+at\b/i, name: 'live at' },
+    { pattern: /\blive\s+from\b/i, name: 'live from' },
+    { pattern: /\b(at|from)\s+(the\s+)?(o2|wembley|stadium|arena|festival|mtv|bbc)/i, name: 'live venue' },
+
+    // Acoustic/Unplugged
+    { pattern: /\bacoustic\b/i, name: 'acoustic' },
+    { pattern: /\bacustic[ao]?\b/i, name: 'acustico' },
+    { pattern: /\bunplugged\b/i, name: 'unplugged' },
+    { pattern: /\bstripped\b/i, name: 'stripped' },
+
+    // Cover/Tribute
+    { pattern: /\bcover\b/i, name: 'cover' },
+    { pattern: /\btribute\b/i, name: 'tribute' },
+    { pattern: /\bin\s*the\s*style\s*of\b/i, name: 'style of' },
+    { pattern: /\bperformed\s*by\b/i, name: 'performed by' },
+    { pattern: /\boriginally\s*(performed\s*)?by\b/i, name: 'originally by' },
+    { pattern: /\bas\s*made\s*famous\s*by\b/i, name: 'made famous by' },
+    { pattern: /\bversion\s*de\b/i, name: 'version de' },
+    { pattern: /\bhomenaje\b/i, name: 'homenaje' },
+
+    // Karaoke/Instrumental
+    { pattern: /\bkaraoke\b/i, name: 'karaoke' },
+    { pattern: /\binstrumental\b/i, name: 'instrumental' },
+    { pattern: /\bbacking\s*track\b/i, name: 'backing track' },
+    { pattern: /\bperformance\s*track\b/i, name: 'performance track' },
+
+    // Sped up/Slowed/Nightcore
+    { pattern: /\bsped\s*up\b/i, name: 'sped up' },
+    { pattern: /\bspeed\s*up\b/i, name: 'speed up' },
+    { pattern: /\bnightcore\b/i, name: 'nightcore' },
+    { pattern: /\bslowed\b/i, name: 'slowed' },
+    { pattern: /\bslowed\s*[\+&]\s*reverb\b/i, name: 'slowed reverb' },
+    { pattern: /\b8d\s*audio\b/i, name: '8d audio' },
+
+    // Chipmunk/Kids versions
+    { pattern: /\bchipmunk\b/i, name: 'chipmunk' },
+    { pattern: /\blullaby\b/i, name: 'lullaby' },
+    { pattern: /\bpara\s*bebes\b/i, name: 'para bebes' },
+    { pattern: /\bfor\s*kids\b/i, name: 'for kids' },
+    { pattern: /\binfantil\b/i, name: 'infantil' },
+
+    // Demo (not studio quality)
+    { pattern: /\bdemo\b/i, name: 'demo' },
+];
+
+/**
+ * Palabras que son RUIDO EDITORIAL, no versiones
+ * Estas NUNCA deben causar rechazo
+ */
+const EDITORIAL_NOISE_PATTERNS = [
+    /\bofficial\s*(music\s*)?video\b/i,
+    /\bofficial\s*audio\b/i,
+    /\bofficial\b/i,
+    /\boficial\b/i,
+    /\b(audio|video)\s*oficial\b/i,
+    /\bvideo\s*clip\b/i,
+    /\blyrics?\b/i,
+    /\bhd\b/i,
+    /\bhq\b/i,
+    /\b4k\b/i,
+    /\b1080p\b/i,
+    /\bexplicit\b/i,
+];
+
+/**
+ * Detecta si el título contiene una versión PROHIBIDA
+ * @param {string} title - Título de la canción
+ * @param {boolean} checkRemix - Si true, también marca remix como prohibido (default: false)
+ * @returns {string|null} Tipo de versión prohibida o null si es válido
+ */
+function detectForbiddenVersion(title, checkRemix = false) {
+    if (!title) return null;
+
+    const lowerTitle = title.toLowerCase();
+
+    // ⭐ REGLA 2: Remaster SIEMPRE es válido - verificar primero
+    if (/\bremaster(ed)?\b/i.test(lowerTitle)) {
+        return null; // NUNCA rechazar remaster
+    }
+
+
+    // ⭐ REGLA 1: Limpiar ruido editorial antes de evaluar
+    let cleanTitle = lowerTitle;
+    for (const noisePattern of EDITORIAL_NOISE_PATTERNS) {
+        cleanTitle = cleanTitle.replace(noisePattern, ' ');
+    }
+    cleanTitle = cleanTitle.replace(/\s+/g, ' ').trim();
+
+    // ⭐ REGLA 3: Remix se evalúa en otro lugar (no aquí por defecto)
+    // Solo rechazar remix si checkRemix es true
+    if (!checkRemix && /\bremix\b/i.test(lowerTitle)) {
+        return null; // Remix se evalúa después con identityScore
+    }
+
+    // Evaluar patrones prohibidos en el título limpio
+    for (const { pattern, name } of FORBIDDEN_VERSION_PATTERNS) {
+        if (pattern.test(cleanTitle)) {
+            return name;
+        }
+    }
+
+    // También verificar en título original para casos edge
+    // (por si el patrón prohibido está junto al ruido editorial)
+    for (const { pattern, name } of FORBIDDEN_VERSION_PATTERNS) {
+        if (pattern.test(lowerTitle)) {
+            // Doble check: asegurarse que no es falso positivo por ruido
+            // Ej: "Live" en "Live Your Life" no debería rechazar
+            // pero "Live at Wembley" sí
+            if (name === 'live' && !/\blive\s+(at|from|in|on)\b/i.test(lowerTitle)) {
+                // "live" solo como palabra suelta puede ser parte del título
+                // Solo rechazar si tiene contexto de concierto
+                continue;
+            }
+            return name;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Detecta versiones VÁLIDAS: remix, remaster, radio edit, extended
+ */
+function detectValidVersion(title) {
+    if (!title) return { type: 'original', details: null };
+
+    const lowerTitle = title.toLowerCase();
+
+    // Remix (VÁLIDO)
+    if (/\bremix\b/i.test(lowerTitle) || /\brmx\b/i.test(lowerTitle)) {
+        const remixMatch = title.match(/\(([^)]+)\s*remix\)/i) || title.match(/\[([^\]]+)\s*remix\]/i);
+        return {
+            type: 'remix',
+            details: remixMatch ? remixMatch[1].trim() : null
+        };
+    }
+
+    // Remaster (VÁLIDO)
+    if (/\bremaster(ed)?\b/i.test(lowerTitle)) {
+        const yearMatch = title.match(/(\d{4})\s*remaster/i) || title.match(/remaster(ed)?\s*(\d{4})/i);
+        return {
+            type: 'remaster',
+            details: yearMatch ? yearMatch[1] || yearMatch[2] : null
+        };
+    }
+
+    // Radio Edit (VÁLIDO)
+    if (/\bradio\s*edit\b/i.test(lowerTitle) || /\bradio\s*version\b/i.test(lowerTitle)) {
+        return { type: 'radio_edit', details: null };
+    }
+
+    // Extended (VÁLIDO)
+    if (/\bextended\b/i.test(lowerTitle)) {
+        return { type: 'extended', details: null };
+    }
+
+    // Single/Album version (VÁLIDO)
+    if (/\b(single|album)\s*version\b/i.test(lowerTitle)) {
+        return { type: 'album_version', details: null };
+    }
+
+    return { type: 'original', details: null };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXTRACCIÓN DE FEATURING/COLABORADORES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function extractFeaturing(title) {
+    if (!title) return [];
+
+    const featuring = [];
+    const patterns = [
+        /\(?feat\.?\s+([^)([\]]+)\)?/gi,
+        /\(?ft\.?\s+([^)([\]]+)\)?/gi,
+        /\(?featuring\s+([^)([\]]+)\)?/gi,
+        /\(?with\s+([^)([\]]+)\)?/gi,
+    ];
+
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(title)) !== null) {
+            const artistPart = match[1];
+            if (artistPart) {
+                const artists = artistPart.split(/[,&]/).map(a => a.trim()).filter(a => a.length > 1);
+                featuring.push(...artists);
+            }
+        }
+    }
+
+    return [...new Set(featuring)];
+}
+
 function extractArtistName(item) {
     let rawArtist = '';
 
-    // Intentar diferentes campos donde puede venir el artista
-    if (item.primaryArtists && item.primaryArtists.trim()) {
+    if (item.primaryArtists?.trim()) {
         rawArtist = item.primaryArtists.trim();
     } else if (item.artist && typeof item.artist === 'string' && item.artist.trim()) {
         rawArtist = item.artist.trim();
     } else if (item.artists) {
-        // Si es un objeto con primary
         if (item.artists.primary && Array.isArray(item.artists.primary)) {
             const names = item.artists.primary.map(a => a.name || a).filter(Boolean);
             if (names.length > 0) rawArtist = names.join(', ');
-        }
-        // Si es un array directo
-        else if (Array.isArray(item.artists)) {
+        } else if (Array.isArray(item.artists)) {
             const names = item.artists.map(a => a.name || a).filter(Boolean);
             if (names.length > 0) rawArtist = names.join(', ');
-        }
-        // Si es string
-        else if (typeof item.artists === 'string' && item.artists.trim()) {
+        } else if (typeof item.artists === 'string' && item.artists.trim()) {
             rawArtist = item.artists.trim();
         }
     }
 
     if (!rawArtist && item.more_info) {
-        if (item.more_info.artistMap && item.more_info.artistMap.primary_artists) {
+        if (item.more_info.artistMap?.primary_artists) {
             const artists = item.more_info.artistMap.primary_artists;
             if (Array.isArray(artists)) {
                 const names = artists.map(a => a.name || a).filter(Boolean);
                 if (names.length > 0) rawArtist = names.join(', ');
             }
         }
-        if (!rawArtist && item.more_info.primary_artists && item.more_info.primary_artists.trim()) {
+        if (!rawArtist && item.more_info.primary_artists?.trim()) {
             rawArtist = item.more_info.primary_artists.trim();
         }
     }
 
-    if (!rawArtist && item.subtitle && item.subtitle.trim()) {
+    if (!rawArtist && item.subtitle?.trim()) {
         rawArtist = item.subtitle.trim();
     }
 
-    if (!rawArtist && item.music && item.music.trim()) {
+    if (!rawArtist && item.music?.trim()) {
         rawArtist = item.music.trim();
-    }
-
-    // Almacenar la lista de artistas individuales para el matching
-    item._artistList = splitArtists(rawArtist);
-
-    // También agregar artistas del título (featuring)
-    const titleFeaturing = extractFeaturingFromTitle(item.name || '');
-    for (const feat of titleFeaturing) {
-        const normFeat = normalize(feat);
-        if (!item._artistList.includes(normFeat)) {
-            item._artistList.push(normFeat);
-        }
     }
 
     return rawArtist;
 }
 
-// Artistas conocidos para dar bonus (con y sin acentos para búsqueda flexible)
+// ═══════════════════════════════════════════════════════════════════════════════
+// ARTISTAS CONOCIDOS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 const KNOWN_ARTISTS = {
     'mana': ['mana', 'maná'],
     'radiohead': ['radiohead'],
@@ -262,566 +463,25 @@ const KNOWN_ARTISTS = {
     'rauw alejandro': ['rauw alejandro', 'rauw'],
     'feid': ['feid'],
     'myke towers': ['myke towers'],
-    'grupo 5': ['grupo 5'],
-    'los angeles azules': ['los angeles azules', 'angeles azules'],
-    'hector lavoe': ['hector lavoe', 'lavoe', 'héctor lavoe'],
-    'willie colon': ['willie colon', 'willie colón', 'colon', 'colón'],
-    'marc anthony': ['marc anthony'],
-    'juan gabriel': ['juan gabriel', 'juanga'],
-    'luis miguel': ['luis miguel'],
-    'jose jose': ['jose jose', 'josé josé'],
-    'vicente fernandez': ['vicente fernandez', 'vicente fernández', 'chente'],
-    'ricardo arjona': ['arjona', 'ricardo arjona'],
-    'juanes': ['juanes'],
-    'carlos vives': ['carlos vives', 'vives'],
-    'alejandro sanz': ['alejandro sanz', 'sanz'],
-    'enrique iglesias': ['enrique iglesias', 'enrique'],
-    'natalia lafourcade': ['natalia lafourcade', 'lafourcade'],
-    'mon laferte': ['mon laferte'],
-    'residente': ['residente', 'calle 13'],
-    'bad gyal': ['bad gyal'],
-    'rosalia': ['rosalia', 'rosalía'],
-    'c tangana': ['c tangana', 'tangana'],
     'peso pluma': ['peso pluma'],
     'fuerza regida': ['fuerza regida'],
     'grupo frontera': ['grupo frontera'],
     'junior h': ['junior h']
 };
 
-function detectArtist(query) {
-    const qn = normalize(query);
-    for (const [name, tokens] of Object.entries(KNOWN_ARTISTS)) {
-        for (const t of tokens) {
-            if (qn.includes(t)) return { name, tokens };
-        }
-    }
-    const w = qn.split(' ');
-    return w.length > 0 ? { name: w[0], tokens: [w[0]] } : null;
-}
-
-// Artistas/contenido basura - RECHAZAR
-const TRASH_ARTISTS = [
-    'sweet little band', 'rockabye baby', 'lullaby', 'twinkle',
-    'vitamin string quartet', 'piano tribute', 'tribute',
-    'tropical panama', 'chichimarimba', 'karaoke',
-    'para ninos', 'infantil', 'midi', 'cover band',
-    'sleep', 'relaxing', 'baby', 'meditation'
-];
-
-const TRASH_WORDS = [
-    'karaoke', 'chipmunk', 'nightcore', '8d audio',
-    'ringtone', 'tono de llamada', 'music box',
-    'lullaby', 'para bebes', 'tutorial', 'lesson'
-];
-
-/**
- * ⭐ HARD REJECT PATTERNS: Patrones que NUNCA deben aparecer en resultados
- * Estos son covers camuflados y contenido no original que deben rechazarse
- */
-const HARD_REJECT_PATTERNS = [
-    'in the style of',
-    'style of',
-    'performance track',
-    'demonstration vocals',
-    'backing track',
-    'karaoke version',
-    'karaoke instrumental',
-    'originally performed by',
-    'as made famous by',
-    'in style of',
-    'instrumental version karaoke',
-    'sing along',
-    'playback',
-    'pista musical'
-];
-
-/**
- * ⭐ COVER INDICATOR PATTERNS: Patrones que indican que NO es una colaboración real
- * Si estos aparecen, NO se debe hacer fallback al título para matching de artista
- */
-const COVER_INDICATOR_PATTERNS = [
-    'in the style of',
-    'style of',
-    'tribute to',
-    'tribute',
-    'cover of',
-    'cover version',
-    'covered by',
-    'homage to',
-    'interpretado por',
-    'version de',
-    'homenaje a'
-];
-
-/**
- * ⭐ FEAT INDICATOR PATTERNS: Patrones que indican colaboración REAL
- * Solo si estos aparecen se permite el fallback al título
- */
-const FEAT_INDICATOR_PATTERNS = [
-    'feat', 'feat.', 'ft', 'ft.', 'featuring', 'with', 'prod by', 'prod.',
-    'x ', ' x ', ' & ', ',', 'and ', ' y '
-];
-
-/**
- * ⭐ CONDITIONAL PENALTIES: Penalizaciones que dependen de la intención del usuario
- * Si el usuario busca explícitamente "remix", no se penaliza
- */
-const CONDITIONAL_PENALTIES = {
-    'remix': 45,
-    'live': 35,
-    'en vivo': 35,
-    'acoustic': 30,
-    'acustico': 30,
-    'radio edit': 20,
-    'extended': 20,
-    'version': 15
-};
-
-/**
- * ⭐ ALWAYS_PENALTY_WORDS: Palabras que SIEMPRE penalizan (no dependen de intención)
- */
-const ALWAYS_PENALTY_WORDS = ['cover', 'tribute', 'slowed', 'reverb', 'medley', 'mashup', 'megamix', 'sped up', 'chipmunk'];
-const ARTIST_BLACKLIST = ['cover', 'tribute', 'karaoke', 'instrumental', 'ringtone', 'style of'];
-
-function shouldReject(item, artistName) {
-    const title = normalize(item.name || '');
-    const rawTitle = (item.name || '').toLowerCase();
-    const artist = normalize(artistName);
-
-    // 1. ⭐ NUEVO: Rechazo DURO por patrones de covers camuflados
-    // Estos NUNCA deben pasar, sin importar el score
-    for (const pattern of HARD_REJECT_PATTERNS) {
-        if (rawTitle.includes(pattern)) {
-            console.log(`[HARD_REJECT] Pattern "${pattern}" found in: "${item.name}"`);
-            return true;
-        }
-    }
-
-    // 2. Rechazo por Artista Basura
-    for (const trash of TRASH_ARTISTS) {
-        if (artist.includes(trash)) return true;
-    }
-
-    // 3. Rechazo por Palabras Prohibidas en Título
-    for (const word of TRASH_WORDS) {
-        if (title.includes(word)) return true;
-    }
-
-    // 4. ⭐ MEJORADO: Si el ARTISTA contiene palabras de blacklist
-    for (const bad of ARTIST_BLACKLIST) {
-        if (artist.includes(bad)) return true;
-    }
-
-    if ((item.duration || 0) > 900) return true; // Muy larga
-    if ((item.duration || 0) < 45) return true;  // Muy corta (ringtone)
-
-    return false;
-}
-
-/**
- * ⭐ MEJORADO: Verifica coincidencia de artista con soporte para:
- * - Colaboraciones: "Shakira & Alejandro Sanz" match "Shakira" → exact
- * - Featuring en título: Si el artista está en el título como feat.
- * - Múltiples artistas separados por coma, &, etc.
- * 
- * @param {string} target - Artista buscado por el usuario
- * @param {string|string[]} currentOrList - Artista del resultado o lista de artistas
- * @param {object} item - El item completo (para acceder a _artistList)
- * @returns {'exact'|'partial'|'none'}
- */
-function checkArtistMatch(target, currentOrList, item = null) {
-    const nTarget = normalize(target);
-
-    if (!nTarget) return 'none';
-
-    // Obtener lista de artistas del item si está disponible
-    let artistList = [];
-    if (item && item._artistList && Array.isArray(item._artistList)) {
-        artistList = item._artistList;
-    } else if (Array.isArray(currentOrList)) {
-        artistList = currentOrList.map(a => normalize(a));
-    } else if (typeof currentOrList === 'string') {
-        artistList = splitArtists(currentOrList);
-    }
-
-    const nCurrent = Array.isArray(currentOrList)
-        ? currentOrList.map(a => normalize(a)).join(' ')
-        : normalize(currentOrList || '');
-
-    if (!nCurrent && artistList.length === 0) return 'none';
-
-    // Tokens del artista buscado (para búsquedas como "Daft Punk Julian Casablancas")
-    const targetTokens = nTarget.split(' ').filter(w => w.length > 1);
-    const targetArtists = splitArtists(target);
-
-    // 1. COINCIDENCIA DIRECTA: El artista buscado está contenido en la lista
-    // Esto resuelve: buscar "Shakira" → encontrar "Shakira, Alejandro Sanz" = EXACT
-    for (const artist of artistList) {
-        if (artist.includes(nTarget) || nTarget.includes(artist)) {
-            return 'exact';
-        }
-    }
-
-    // 2. COINCIDENCIA DIRECTA en string completo
-    if (nCurrent.includes(nTarget) || nTarget.includes(nCurrent)) {
-        return 'exact';
-    }
-
-    // 3. COINCIDENCIA POR TOKENS: Verificar si TODOS los artistas buscados están
-    // Esto resuelve: buscar "Daft Punk Julian Casablancas" → todos deben estar
-    if (targetArtists.length > 1) {
-        let allFound = true;
-        for (const searchArtist of targetArtists) {
-            let found = false;
-            for (const itemArtist of artistList) {
-                if (itemArtist.includes(searchArtist) || searchArtist.includes(itemArtist)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                allFound = false;
-                break;
-            }
-        }
-        if (allFound) return 'exact';
-    }
-
-    // 4. TOKEN MATCHING: Buscar palabras individuales
-    const tCurrent = nCurrent.split(' ').filter(w => w.length > 1);
-
-    let matches = 0;
-    for (const w of targetTokens) {
-        if (tCurrent.includes(w)) matches++;
-        // También buscar en la lista de artistas
-        for (const artist of artistList) {
-            if (artist.includes(w)) {
-                matches++;
-                break;
-            }
-        }
-    }
-
-    // Normalizar matches (puede haber duplicados)
-    const uniqueMatches = Math.min(matches, targetTokens.length);
-
-    if (uniqueMatches >= targetTokens.length) return 'exact';
-
-    // ⭐ NUEVO: Ser más flexible - si encontramos al menos 1 match y es una sola palabra
-    // Ejemplo: buscar "Ca7riel" en "Ca7riel & Paco Amoroso" = exact
-    if (targetTokens.length === 1 && uniqueMatches >= 1) {
-        return 'exact';
-    }
-
-    // ⭐ NUEVO: Si encontramos la mayoría de tokens, es exact (no partial)
-    // Esto ayuda con "Paco Amoroso" en "Ca7riel, Paco Amoroso"
-    if (uniqueMatches > 0 && uniqueMatches >= (targetTokens.length * 0.7)) {
-        return 'exact';
-    }
-
-    if (uniqueMatches > 0 && uniqueMatches >= (targetTokens.length / 2)) return 'partial';
-
-    return 'none';
-}
-
-/**
- * ⭐ MEJORADO v2: Calcula el score de un resultado con:
- * - Limpieza de títulos para mejor comparación
- * - Detección de featuring/colaboradores en el título
- * - Penalización de compilaciones (Greatest Hits, Best Of)
- * - Priorización de versiones de álbum original
- * - ⭐ NUEVO: Penalizaciones condicionales según intención del usuario
- * - ⭐ NUEVO: Detección estricta de covers camuflados
- * 
- * @param {object} item - Resultado de la API
- * @param {string[]} qWords - Palabras de la query normalizada
- * @param {string} targetArtist - Artista buscado
- * @param {string} targetTrack - Canción buscada
- * @param {number} targetDuration - Duración esperada
- * @param {string} rawQuery - ⭐ NUEVO: Query original para detectar intención
- * @returns {number} Score final
- */
-function calcScore(item, qWords, targetArtist, targetTrack, targetDuration, rawQuery = '') {
-    let score = 50;
-
-    const rawTitle = item.name || '';
-    const rawTitleLower = rawTitle.toLowerCase();
-    const cleanedTitle = cleanTitle(rawTitle);  // Título limpio
-    const title = normalize(cleanedTitle);
-    const rawTitleNorm = normalize(rawTitle);
-
-    // Extraemos el artista del resultado una sola vez
-    const itemArtist = normalize(item._artistName || extractArtistName(item) || '');
-    const duration = item.duration || 0;
-    const albumName = normalize(item.album?.name || item.album || '');
-
-    // ⭐ NUEVO: Normalizar la query para detectar intención del usuario
-    const queryLower = (rawQuery || '').toLowerCase();
-    const queryNorm = normalize(rawQuery || '');
-
-    // --- 0. ⭐ NUEVO: DETECCIÓN DE COVER PATTERNS EN TÍTULO ---
-    // Si el título contiene indicadores de cover, marcar para penalización severa
-    let isCoverIndicator = false;
-    for (const pattern of COVER_INDICATOR_PATTERNS) {
-        if (rawTitleLower.includes(pattern)) {
-            isCoverIndicator = true;
-            break;
-        }
-    }
-
-    // --- 1. FILTRO DE ARTISTA INTELIGENTE (VERSIÓN MEJORADA v2) ---
-    if (targetArtist && targetArtist.length > 1) {
-        const matchType = checkArtistMatch(targetArtist, itemArtist, item);
-
-        if (matchType === 'exact') {
-            score += 150; // Si es el artista exacto, gana seguro.
-        } else if (matchType === 'partial') {
-            score += 50;
-        } else {
-            // ⭐ MEJORADO: El artista NO coincide, buscamos en el título...
-            const artistInTitle = checkArtistMatchInTitle(targetArtist, rawTitle);
-
-            if (artistInTitle === 'exact' || artistInTitle === 'partial') {
-                // ⭐ NUEVO: Verificar si es un COVER CAMUFLADO
-                // Si tiene indicadores de cover, RECHAZAR el fallback al título
-                if (isCoverIndicator) {
-                    score -= 150; // Penalización SEVERA: Es un cover camuflado
-                    console.log(`[COVER_DETECTED] "${rawTitle}" - Cover indicator + artist mismatch`);
-                } else {
-                    // Solo confiamos si el título tiene indicadores de colaboración REAL
-                    let hasRealCollab = false;
-                    for (const pattern of FEAT_INDICATOR_PATTERNS) {
-                        if (rawTitleLower.includes(pattern.toLowerCase())) {
-                            hasRealCollab = true;
-                            break;
-                        }
-                    }
-
-                    if (hasRealCollab) {
-                        score += 80; // Es un feat legítimo
-                    } else if (rawTitle.includes('-') || rawTitle.includes(':')) {
-                        // Formato "Artista - Canción" sin feat = probablemente cover
-                        score -= 80;
-                    } else {
-                        // El artista está en el título pero sin indicadores = cover
-                        score -= 100;
-                    }
-                }
-            } else {
-                score -= 50; // No está el artista ni en autor ni en título
-            }
-        }
-    }
-
-    // --- 2. COINCIDENCIA DE TÍTULO (con título limpio) ---
-    const targetTrackClean = cleanTitle(targetTrack || '');
-    const trackWords = normalize(targetTrackClean).split(' ').filter(w => w.length > 2);
-    let wordsFound = 0;
-    for (const w of trackWords) {
-        // Buscar en título limpio (sin sufijos)
-        if (title.includes(w)) {
-            wordsFound++;
-        } else if (itemArtist.includes(w)) {
-            // FIX GORILLAZ + DE LA SOUL: Si la palabra no está en el título,
-            // verificar si está en el nombre del artista (colaboradores)
-            wordsFound++;
-        }
-    }
-
-    if (wordsFound === trackWords.length && trackWords.length > 0) {
-        score += 60;  // Bonus mayor por match perfecto de título
-    } else if (wordsFound > 0) {
-        score += 10 + (wordsFound * 10);  // Bonus proporcional
-    }
-
-    // Bonus extra si el título limpio coincide exactamente
-    if (trackWords.length > 0 && title === normalize(targetTrackClean)) {
-        score += 30;  // Match exacto de título
-    }
-
-    // --- 2.5 BONUS DE ÁLBUM ---
-    // Si el usuario busca por nombre de álbum (ej: "Ca7riel Baño Maria"),
-    // las canciones de ese álbum deben recibir puntos aunque el título no coincida.
-    if (albumName && trackWords.length > 0) {
-        let albumWordsFound = 0;
-        for (const w of trackWords) {
-            if (albumName.includes(w)) albumWordsFound++;
-        }
-
-        // Si encontramos palabras de la query en el nombre del álbum
-        if (albumWordsFound >= trackWords.length && trackWords.length > 0) {
-            score += 80;  // ¡El álbum coincide perfectamente! (Caso: buscar "Baño Maria")
-        } else if (albumWordsFound > 0 && albumWordsFound >= trackWords.length / 2) {
-            score += 40;  // Match parcial del álbum
-        }
-    }
-
-    // También buscar en qWords (la query completa) por si no viene targetTrack separado
-    if (albumName && qWords.length > 0) {
-        let qWordsInAlbum = 0;
-        for (const w of qWords) {
-            if (albumName.includes(w)) qWordsInAlbum++;
-        }
-        // Si más de la mitad de las palabras de la query están en el álbum
-        if (qWordsInAlbum > qWords.length / 2) {
-            score += 30;  // Bonus adicional por coincidencia query-álbum
-        }
-    }
-
-    // --- 3. FILTRO DE DURACIÓN (Tolerancia Ampliada) ---
-    if (targetDuration > 0) {
-        const diff = Math.abs(duration - targetDuration);
-        if (diff <= 5) score += 40;
-        else if (diff <= 15) score += 20;
-        else if (diff <= 30) score += 5;
-        // Penalizamos menos fuerte la duración, por si es una versión remaster
-        else if (diff > 60) score -= 30;
-    }
-
-    // --- 4. ⭐ PENALIZACIONES DE CALIDAD (MEJORADO v2) ---
-
-    // 4.1 Penalizaciones que SIEMPRE aplican (no dependen de intención)
-    for (const word of ALWAYS_PENALTY_WORDS) {
-        if (rawTitleNorm.includes(word)) {
-            score -= 40;
-        }
-    }
-
-    // 4.2 ⭐ NUEVO: Penalizaciones CONDICIONALES según intención del usuario
-    // Solo penalizamos "remix", "live", etc. si el usuario NO los buscó
-    for (const [word, penalty] of Object.entries(CONDITIONAL_PENALTIES)) {
-        const wordNorm = normalize(word);
-        const resultHasWord = rawTitleNorm.includes(wordNorm);
-        const userRequestedWord = queryNorm.includes(wordNorm);
-
-        if (resultHasWord) {
-            if (userRequestedWord) {
-                // ⭐ El usuario SÍ pidió esto explícitamente → BONUS en lugar de penalización
-                score += 45;  // Bonus por coincidencia de intención
-            } else {
-                // El usuario NO pidió esto → penalizar
-                score -= penalty;
-            }
-        }
-    }
-
-    // 4.3 Rechazo extra para covers explícitos en el artista
-    if (itemArtist.includes('cover') || itemArtist.includes('tribute')) {
-        score -= 100;
-    }
-
-    // --- 5. PRIORIDAD ÁLBUM vs COMPILACIÓN ---
-    // Penalizar compilaciones para evitar duplicados
-    const compilationPatterns = [
-        'greatest hits', 'best of', 'the essential', 'gold collection',
-        'ultimate collection', 'the very best', 'anthology', 'the collection',
-        'complete collection', 'hits collection', 'lo mejor de', 'grandes exitos',
-        'definitive collection', 'super hits', 'top hits'
-    ];
-
-    for (const pattern of compilationPatterns) {
-        if (albumName.includes(pattern)) {
-            score -= 25;  // Penalización moderada para compilaciones
-            break;
-        }
-    }
-
-    // Bonus si parece ser del álbum original (título del álbum similar al track)
-    if (albumName && trackWords.length > 0) {
-        let albumMatchCount = 0;
-        for (const w of trackWords) {
-            if (albumName.includes(w)) albumMatchCount++;
-        }
-        // Si el nombre del álbum contiene varias palabras del track, probablemente es el single/álbum original
-        if (albumMatchCount >= Math.ceil(trackWords.length / 2)) {
-            score += 15;
-        }
-    }
-
-    // --- 6. BONUS POR FEATURING DETECTADO EN QUERY ---
-    // Si el usuario buscó "Daft Punk Julian Casablancas" y Julian está en el feat., bonus
-    if (targetArtist) {
-        const searchArtists = splitArtists(targetArtist);
-        const titleFeaturing = extractFeaturingFromTitle(rawTitle);
-
-        for (const searchArtist of searchArtists) {
-            for (const featArtist of titleFeaturing) {
-                if (normalize(featArtist).includes(normalize(searchArtist)) ||
-                    normalize(searchArtist).includes(normalize(featArtist))) {
-                    score += 40;  // ¡El colaborador buscado está en el featuring!
-                    break;
-                }
-            }
-        }
-    }
-
-    // --- 7. ⭐ NUEVO: PENALIZACIÓN POR THUMBNAIL FALTANTE ---
-    // Si no tiene thumbnail válido, penalizar para UX del frontend
-    const thumbnail = item.image?.find(i => i.quality === '500x500')?.url ||
-        item.image?.[0]?.url || '';
-    if (!thumbnail || thumbnail.length < 10) {
-        score -= 30;  // Penalización moderada por falta de imagen
-    }
-
-    return score;
-}
-
-/**
- * ⭐ NUEVO: Busca si el artista aparece en el título como featuring/colaborador
- * @param {string} targetArtist - Artista buscado
- * @param {string} title - Título de la canción
- * @returns {'exact'|'partial'|'none'}
- */
-function checkArtistMatchInTitle(targetArtist, title) {
-    if (!targetArtist || !title) return 'none';
-
-    const nTarget = normalize(targetArtist);
-    const featuring = extractFeaturingFromTitle(title);
-
-    for (const feat of featuring) {
-        const nFeat = normalize(feat);
-        if (nFeat.includes(nTarget) || nTarget.includes(nFeat)) {
-            return 'exact';
-        }
-    }
-
-    // También buscar directamente en el título normalizado
-    const nTitle = normalize(title);
-    const targetTokens = nTarget.split(' ').filter(w => w.length > 2);
-    let matches = 0;
-    for (const token of targetTokens) {
-        if (nTitle.includes(token)) matches++;
-    }
-
-    if (matches >= targetTokens.length && targetTokens.length > 0) return 'exact';
-    if (matches > 0 && matches >= targetTokens.length / 2) return 'partial';
-
-    return 'none';
-}
-
-/**
- * ⭐ NUEVO: Detecta si la query contiene un artista conocido y lo extrae
- * Ejemplo: "mana rayando el sol" → { artist: "mana", track: "rayando el sol" }
- * @param {string} query - Query completa del usuario
- * @returns {{ artist: string|null, track: string }}
- */
-function detectAndExtractArtist(query) {
+function detectKnownArtist(query) {
     const qNorm = normalize(query);
     let bestMatch = null;
     let bestMatchLength = 0;
     let cleanQuery = query;
 
-    // Buscar en KNOWN_ARTISTS primero (prioridad máxima)
     for (const [realName, aliases] of Object.entries(KNOWN_ARTISTS)) {
         for (const alias of aliases) {
-            // Buscamos el alias como palabra completa
             const regex = new RegExp(`\\b${alias}\\b`, 'i');
             if (regex.test(qNorm)) {
-                // Si encontramos el artista, guardamos el más largo (más específico)
                 if (!bestMatch || alias.length > bestMatchLength) {
                     bestMatch = realName;
                     bestMatchLength = alias.length;
-                    // Quitamos el nombre del artista de la query para buscar solo la canción
                     cleanQuery = query.replace(new RegExp(alias, 'gi'), '').replace(/\s+/g, ' ').trim();
                 }
             }
@@ -831,13 +491,441 @@ function detectAndExtractArtist(query) {
     return { artist: bestMatch, track: cleanQuery };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// FILTRO DE CONTENIDO BASURA (Simplificado - Solo basura real)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TRASH_ARTISTS = [
+    'sweet little band', 'rockabye baby', 'lullaby', 'twinkle',
+    'vitamin string quartet', 'piano tribute', 'tribute players',
+    'kidz bop', 'para ninos', 'baby einstein', 'cover band',
+    'sleep baby', 'relaxing baby', 'meditation music'
+];
+
+const TRASH_PATTERNS = [
+    'ringtone', 'tono de llamada', 'music box',
+    'tutorial', 'lesson', 'how to play',
+    'midi version', 'midi file'
+];
+
+/**
+ * Verifica si es contenido BASURA (no música real)
+ * Solo rechaza: karaoke artists, kids music, ringtones, tutorials
+ * NO rechaza: compilaciones, remasters, radio edits
+ * NO rechaza por canal/uploader - la identidad musical define validez
+ * @param {Object} candidate - El candidato a evaluar
+ * @param {number} targetDuration - Duración objetivo (para detectar album-mix)
+ */
+function isTrashContent(candidate, targetDuration = 0) {
+    const rawTitle = (candidate.name || '').toLowerCase();
+    const artist = normalize(extractArtistName(candidate) || '');
+
+    // Artista basura
+    for (const trash of TRASH_ARTISTS) {
+        if (artist.includes(trash)) return true;
+    }
+
+    // Patrones basura en título
+    for (const pattern of TRASH_PATTERNS) {
+        if (rawTitle.includes(pattern)) return true;
+    }
+
+    // ⭐ Rechazar videos muy largos (album-mix, compilaciones de video)
+    // Máximo 15 minutos = 900 segundos
+    // Solo aplicar si tenemos targetDuration para comparar
+    const duration = candidate.duration || 0;
+    if (duration > 900 && targetDuration > 0) {
+        return true; // Probablemente es un album-mix o compilación
+    }
+
+    return false;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FASE 1: IDENTIDAD PRIMARIA (Más permisiva)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * FASE 1: Confirma título y artista
+ * REGLA: Si artistScore >= 0.8, NO rechazar aunque titleScore sea bajo
+ * El título NO puede ser el único motivo de rechazo
+ */
+function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
+    const details = {
+        titleMatch: 'none',
+        artistMatch: 'none',
+        titleScore: 0,
+        artistScore: 0
+    };
+
+    // === TÍTULO ===
+    const candidateTitle = normalize(cleanTitle(candidate.name || ''));
+    const targetTitleNorm = normalize(cleanTitle(targetTitle || ''));
+    const targetTitleWords = targetTitleNorm.split(' ').filter(w => w.length > 1);
+
+    if (!candidateTitle || targetTitleWords.length === 0) {
+        details.titleMatch = 'unknown';
+        details.titleScore = 0.5; // Sin info, asumimos neutral
+    } else {
+        let matchedWords = 0;
+        for (const word of targetTitleWords) {
+            if (candidateTitle.includes(word)) matchedWords++;
+        }
+
+        const titleRatio = matchedWords / targetTitleWords.length;
+
+        if (titleRatio >= 0.8) {
+            details.titleMatch = 'exact';
+            details.titleScore = 1.0;
+        } else if (titleRatio >= 0.5) {
+            details.titleMatch = 'partial';
+            details.titleScore = titleRatio;
+        } else if (titleRatio > 0) {
+            details.titleMatch = 'weak';
+            details.titleScore = titleRatio * 0.7; // Menos penalización
+        } else {
+            details.titleMatch = 'none';
+            details.titleScore = 0.2; // Mínimo para no hundir el score
+        }
+    }
+
+    // === ARTISTA ===
+    const candidateArtist = normalize(extractArtistName(candidate) || '');
+    const candidateArtistList = splitArtists(candidateArtist);
+    const targetArtistNorm = normalize(targetArtist || '');
+    const targetArtistList = splitArtists(targetArtist || '');
+
+    if (!targetArtistNorm) {
+        details.artistMatch = 'unknown';
+        details.artistScore = 0.6; // Sin target, asumimos neutral-positivo
+    } else {
+        let foundExact = false;
+        let foundPartial = false;
+
+        // Buscar en lista de artistas
+        for (const targetA of targetArtistList.length > 0 ? targetArtistList : [targetArtistNorm]) {
+            for (const candA of candidateArtistList) {
+                if (candA === targetA || candA.includes(targetA) || targetA.includes(candA)) {
+                    foundExact = true;
+                    break;
+                }
+                const targetTokens = targetA.split(' ');
+                const candTokens = candA.split(' ');
+                const commonTokens = targetTokens.filter(t => candTokens.includes(t));
+                if (commonTokens.length >= targetTokens.length * 0.5) {
+                    foundPartial = true;
+                }
+            }
+            if (foundExact) break;
+        }
+
+        // También verificar en string completo
+        if (!foundExact && (candidateArtist.includes(targetArtistNorm) || targetArtistNorm.includes(candidateArtist))) {
+            foundExact = true;
+        }
+
+        // Verificar en featuring del título
+        if (!foundExact && !foundPartial) {
+            const featuring = extractFeaturing(candidate.name || '');
+            for (const feat of featuring) {
+                const normFeat = normalize(feat);
+                if (normFeat.includes(targetArtistNorm) || targetArtistNorm.includes(normFeat)) {
+                    foundExact = true;
+                    break;
+                }
+            }
+        }
+
+        if (foundExact) {
+            details.artistMatch = 'exact';
+            details.artistScore = 1.0;
+        } else if (foundPartial) {
+            details.artistMatch = 'partial';
+            details.artistScore = 0.7;
+        } else {
+            details.artistMatch = 'none';
+            details.artistScore = 0.1;
+        }
+    }
+
+    // Score combinado - artista tiene más peso
+    const combinedScore = (details.titleScore * 0.35) + (details.artistScore * 0.65);
+
+    return {
+        score: combinedScore,
+        details
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FASE 2: TIPO DE VERSIÓN
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * FASE 2: Detecta el tipo de versión
+ * Las versiones prohibidas se rechazan antes de llegar aquí
+ * Solo evalúa versiones válidas (original, remix, remaster, radio edit)
+ */
+function evaluateVersion(candidate) {
+    const title = candidate.name || '';
+    const version = detectValidVersion(title);
+    const featuring = extractFeaturing(title);
+
+    // Las versiones válidas tienen score alto
+    const versionScores = {
+        'original': 1.0,
+        'remaster': 1.0,      // Remasters son excelentes
+        'album_version': 1.0,
+        'radio_edit': 0.95,   // Radio edits son válidos
+        'remix': 0.90,        // Remixes oficiales son válidos
+        'extended': 0.90
+    };
+
+    const score = versionScores[version.type] || 1.0;
+
+    return {
+        score,
+        details: {
+            version,
+            featuring
+        }
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FASE 3: CONTEXTO MUSICAL (Simplificado)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * FASE 3: Evalúa duración y álbum
+ * - albumScore SOLO tiene peso si targetAlbum viene explícito
+ * - NO penaliza compilaciones automáticamente
+ */
+function evaluateMusicalContext(candidate, targetDuration, targetAlbum) {
+    const details = {
+        durationDiff: null,
+        durationScore: 1.0,
+        albumMatch: 'unknown',
+        albumScore: 0.5,
+        isCompilation: false
+    };
+
+    // === DURACIÓN ===
+    const candidateDuration = candidate.duration || 0;
+    if (targetDuration > 0 && candidateDuration > 0) {
+        const diff = Math.abs(candidateDuration - targetDuration);
+        details.durationDiff = diff;
+
+        if (diff <= 5) {
+            details.durationScore = 1.0;
+        } else if (diff <= 15) {
+            details.durationScore = 0.9;
+        } else if (diff <= 30) {
+            details.durationScore = 0.75;
+        } else if (diff <= 60) {
+            details.durationScore = 0.5;
+        } else {
+            details.durationScore = 0.3;
+        }
+    }
+
+    // === ÁLBUM (solo si viene explícito) ===
+    const albumName = normalize(candidate.album?.name || candidate.album || '');
+    const targetAlbumNorm = normalize(targetAlbum || '');
+
+    // Detectar compilaciones (solo para info, no penaliza)
+    const compilationPatterns = [
+        'greatest hits', 'best of', 'the essential', 'anthology',
+        'the very best', 'hits collection', 'grandes exitos'
+    ];
+
+    for (const pattern of compilationPatterns) {
+        if (albumName.includes(pattern)) {
+            details.isCompilation = true;
+            break;
+        }
+    }
+
+    // Comparar álbum SOLO si tenemos objetivo explícito
+    if (targetAlbumNorm && albumName) {
+        if (albumName.includes(targetAlbumNorm) || targetAlbumNorm.includes(albumName)) {
+            details.albumMatch = 'exact';
+            details.albumScore = 1.0;
+        } else {
+            const targetWords = targetAlbumNorm.split(' ').filter(w => w.length > 2);
+            const albumWords = albumName.split(' ').filter(w => w.length > 2);
+            const common = targetWords.filter(w => albumWords.includes(w));
+            if (common.length >= targetWords.length * 0.5) {
+                details.albumMatch = 'partial';
+                details.albumScore = 0.7;
+            }
+        }
+    }
+
+    // Score: duración es lo único que realmente importa si no hay álbum target
+    const durationWeight = targetDuration > 0 ? 0.8 : 0;
+    const albumWeight = targetAlbumNorm ? 0.2 : 0; // Peso SOLO si viene explícito
+    const baseWeight = 1 - durationWeight - albumWeight;
+
+    const score = (details.durationScore * durationWeight) +
+        (details.albumScore * albumWeight) +
+        (1.0 * baseWeight);
+
+    return {
+        score: Math.max(0, Math.min(1, score)),
+        details
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EVALUACIÓN COMPLETA DE CANDIDATO
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Evalúa un candidato completo
+ * Orden de rechazo:
+ * 1. Contenido basura → RECHAZO
+ * 2. Versión prohibida (live, cover, etc.) → RECHAZO
+ * 3. Evaluación de identidad, versión, contexto → SCORE
+ */
+function evaluateCandidate(candidate, params) {
+    const { targetArtist, targetTitle, targetDuration, targetAlbum } = params;
+    const title = candidate.name || '';
+
+    // 1. PRE-FILTRO: Contenido basura
+    if (isTrashContent(candidate, targetDuration)) {
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'trash_content',
+            identityScore: 0,
+            versionScore: 0,
+            durationScore: 0,
+            albumScore: 0,
+            finalConfidence: 0,
+            matchDetails: { reason: 'Contenido basura' }
+        };
+    }
+
+    // 2. ⭐ RECHAZO INMEDIATO: Versiones prohibidas (excepto remix, que se evalúa después)
+    const forbiddenVersion = detectForbiddenVersion(title, false);
+    if (forbiddenVersion) {
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'forbidden_version',
+            forbiddenType: forbiddenVersion,
+            identityScore: 0,
+            versionScore: 0,
+            durationScore: 0,
+            albumScore: 0,
+            finalConfidence: 0,
+            matchDetails: { reason: `Versión prohibida: ${forbiddenVersion}` }
+        };
+    }
+
+    // 3. FASE 1: Identidad Primaria
+    const phase1 = evaluatePrimaryIdentity(candidate, targetArtist, targetTitle);
+
+    // 4. ⭐ REGLA 3: Remix - rechazar solo si identidad es débil o parece cover/tribute
+    const isRemix = /\bremix\b/i.test(title);
+    if (isRemix && phase1.score < 0.6) {
+        // Remix con identidad débil - verificar si es cover camuflado
+        const lowerTitle = title.toLowerCase();
+        const isCoverRemix = /\b(cover|tribute|style\s*of)\b/i.test(lowerTitle);
+        if (isCoverRemix || phase1.score < 0.35) {
+            return {
+                passed: false,
+                rejected: true,
+                rejectReason: 'weak_remix',
+                identityScore: phase1.score,
+                versionScore: 0,
+                durationScore: 0,
+                albumScore: 0,
+                finalConfidence: 0,
+                matchDetails: { reason: `Remix con identidad débil (${phase1.score.toFixed(2)})` }
+            };
+        }
+    }
+
+    // 5. FASE 2: Tipo de Versión (válida)
+    const phase2 = evaluateVersion(candidate);
+
+    // 6. FASE 3: Contexto Musical
+    const phase3 = evaluateMusicalContext(candidate, targetDuration, targetAlbum);
+
+    // 7. Calcular confidence final
+    const weights = {
+        identity: 0.50,    // Identidad es lo más importante
+        version: 0.15,     // Versión
+        context: 0.35      // Contexto (duración principalmente)
+    };
+
+    const finalConfidence =
+        (phase1.score * weights.identity) +
+        (phase2.score * weights.version) +
+        (phase3.score * weights.context);
+
+    // 8. ⭐ REGLA DE PASO v3.2: Basada en identidad musical
+    // 
+    // NUEVA REGLA: Aceptar track si identidad musical es clara,
+    // independientemente del canal/uploader.
+    //
+    // Criterios de aceptación:
+    // - artistScore >= 0.8 AND titleScore >= 0.7 AND durationScore >= 0.8 (identidad fuerte)
+    // - O: identityScore >= 0.4 (regla anterior)
+    // - O: identityScore >= 0.3 AND durationScore >= 0.7 (regla anterior)
+    //
+    const artistScore = phase1.details.artistScore;
+    const titleScore = phase1.details.titleScore;
+    const durationScore = phase3.details.durationScore;
+
+    // Regla de identidad musical fuerte (para subidas no oficiales)
+    const hasStrongMusicalIdentity =
+        artistScore >= 0.8 &&
+        titleScore >= 0.7 &&
+        durationScore >= 0.8;
+
+    // Reglas anteriores
+    const passesIdentityThreshold = phase1.score >= 0.4;
+    const passesWithDuration = phase1.score >= 0.3 && durationScore >= 0.7;
+
+    const passed = hasStrongMusicalIdentity || passesIdentityThreshold || passesWithDuration;
+
+    return {
+        passed,
+        rejected: false, // No rechazado, solo no pasó el umbral
+        rejectReason: null,
+        identityScore: phase1.score,
+        versionScore: phase2.score,
+        durationScore: phase3.details.durationScore,
+        albumScore: phase3.details.albumScore,
+        finalConfidence,
+        matchDetails: {
+            titleMatch: phase1.details.titleMatch,
+            artistMatch: phase1.details.artistMatch,
+            titleScore: phase1.details.titleScore,
+            artistScore: phase1.details.artistScore,
+            version: phase2.details.version,
+            featuring: phase2.details.featuring,
+            durationDiff: phase3.details.durationDiff,
+            isCompilation: phase3.details.isCompilation,
+            hasStrongMusicalIdentity // ⭐ Nuevo: indica si pasó por identidad fuerte
+        }
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// API: BÚSQUEDA EXTERNA
+// ═══════════════════════════════════════════════════════════════════════════════
+
 async function searchApi(query, limit) {
     try {
         const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=${limit}`;
         console.log('[search] Fetching:', url);
 
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 10000);
+        const tid = setTimeout(() => ctrl.abort(), 12000);
 
         const res = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
@@ -845,12 +933,6 @@ async function searchApi(query, limit) {
         if (!res.ok) return [];
 
         const data = await res.json();
-
-        // ⭐ DEBUG: Ver la estructura de la respuesta
-        if (data.data && data.data.results && data.data.results.length > 0) {
-            console.log('[search] Sample item structure:', JSON.stringify(data.data.results[0], null, 2));
-        }
-
         return data?.data?.results || [];
     } catch (e) {
         console.log('[search] Error:', e.message);
@@ -858,73 +940,229 @@ async function searchApi(query, limit) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// HANDLER PRINCIPAL
+// ═══════════════════════════════════════════════════════════════════════════════
+
 async function handler(req, res) {
     const qRaw = req.query.q || req.query.query || '';
     let targetArtist = req.query.artist || '';
     let targetTrack = req.query.track || '';
     const targetDuration = parseInt(req.query.duration) || 0;
+    const targetAlbum = req.query.album || '';
     const limit = parseInt(req.query.limit) || 10;
 
-    if (!qRaw) return res.status(400).json({ success: false, error: 'Missing q' });
+    if (!qRaw) {
+        return res.status(400).json({ success: false, error: 'Missing q parameter' });
+    }
 
-    // ⭐ NUEVO: INTELIGENCIA - Si no me dan artista explícito, intento detectarlo en la query
-    let searchQ = qRaw;
+    // Detección inteligente de artista si no viene explícito
+    let searchQuery = qRaw;
     if (!targetArtist) {
-        const detected = detectAndExtractArtist(qRaw);
+        const detected = detectKnownArtist(qRaw);
         if (detected.artist) {
             console.log(`[SmartSearch] Detected Artist: "${detected.artist}" | Track: "${detected.track}"`);
             targetArtist = detected.artist;
             targetTrack = detected.track || targetTrack;
 
-            // TRUCO: A veces es mejor buscar "Artista + Cancion" en la API para mejores resultados,
-            // pero usar el targetArtist separado para el filtrado interno.
-            // Si la query quedó vacía (usuario solo buscó "Mana"), buscamos al artista.
             if (!detected.track || detected.track.length < 2) {
-                searchQ = qRaw; // Mantener la query original
+                searchQuery = qRaw;
             } else {
-                // Buscar con artista + canción para mejores resultados de API
-                searchQ = `${detected.artist} ${detected.track}`;
+                searchQuery = `${detected.artist} ${detected.track}`;
             }
         }
     }
 
-    console.log(`[backend] Searching: "${searchQ}" | Target Artist: "${targetArtist}" | Track: "${targetTrack}" (${targetDuration}s)`);
+    console.log(`[backend] Searching: "${searchQuery}" | Artist: "${targetArtist}" | Track: "${targetTrack}" (${targetDuration}s)`);
 
-    // Usar la API externa (limitamos a 25 para ser rápidos pero tener variedad)
-    const results = await searchApi(searchQ, 25);
+    // Construir clave (común para frozen y cache)
+    const cacheKey = buildCacheKey({
+        title: targetTrack || qRaw,
+        artist: targetArtist,
+        duration: targetDuration
+    });
 
-    const scored = [];
-    const qWords = normalize(searchQ).split(' ').filter(w => w.length > 1);
+    // ❄️ FROZEN: Verificar primero - bypassea TODO el motor
+    const frozen = frozenDecisions.get(cacheKey);
+    if (frozen && Date.now() - frozen.timestamp < FREEZE_TTL) {
+        const ageDays = Math.round((Date.now() - frozen.timestamp) / (1000 * 60 * 60 * 24));
+        console.log(`[❄️ frozen] HIT for key: ${cacheKey} | Age: ${ageDays} days`);
+
+        // Devolver la decisión congelada en formato compatible
+        const fb = frozen.frozenBest;
+        return res.status(200).json({
+            success: true,
+            source: 'frozen',
+            frozenAt: new Date(frozen.timestamp).toISOString(),
+            query: {
+                original: qRaw,
+                targetArtist,
+                targetTrack,
+                targetDuration,
+                targetAlbum
+            },
+            // Resultado único (la decisión congelada)
+            results: [{
+                title: fb.title,
+                author: { name: fb.artist },
+                duration: fb.duration,
+                videoId: fb.videoId,
+                thumbnail: fb.thumbnail || '',
+                album: fb.album || null,
+                source: 'frozen',
+                scores: {
+                    finalConfidence: fb.confidence
+                }
+            }]
+        });
+    }
+
+    // ⭐ CACHE: Verificar cache estándar (24h)
+    const cached = searchCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        console.log(`[cache] HIT for key: ${cacheKey}`);
+        return res.status(200).json({
+            success: true,
+            source: 'cache',
+            cachedAt: new Date(cached.timestamp).toISOString(),
+            ...cached.result
+        });
+    }
+
+    // Buscar candidatos
+    const results = await searchApi(searchQuery, 35);
+
+    // Evaluar cada candidato
+    const passedCandidates = [];
+    const fallbackCandidates = []; // Para evitar 0 resultados
+
+    const evaluationParams = {
+        targetArtist,
+        targetTitle: targetTrack || qRaw,
+        targetDuration,
+        targetAlbum
+    };
 
     for (const item of results) {
-        const artistName = extractArtistName(item);
-        item._artistName = artistName;
+        const evaluation = evaluateCandidate(item, evaluationParams);
 
-        if (shouldReject(item, artistName)) continue;
+        item._evaluation = evaluation;
+        item._artistName = extractArtistName(item);
 
-        // Pasar los datos exactos al score (ahora con artista detectado + query original para intención)
-        const score = calcScore(item, qWords, targetArtist, targetTrack, targetDuration, qRaw);
-
-        if (score > 0) {
-            item._score = score;
-            scored.push(item);
+        if (evaluation.rejected) {
+            // Rechazado (versión prohibida o basura)
+            console.log(`[reject] "${item.name}" - ${evaluation.rejectReason}: ${evaluation.forbiddenType || evaluation.matchDetails?.reason}`);
+        } else if (evaluation.passed) {
+            // Pasó el filtro
+            passedCandidates.push(item);
+        } else {
+            // No pasó pero es válido (para fallback)
+            // Solo agregar si tiene identityScore decente
+            if (evaluation.identityScore >= 0.35) {
+                fallbackCandidates.push(item);
+            }
         }
     }
 
-    // Ordenar y cortar
-    scored.sort((a, b) => b._score - a._score);
+    // ⭐ REGLA 6: Nunca devolver 0 resultados
+    let finalCandidates = passedCandidates;
+    let usedFallback = false;
 
-    const final = scored.slice(0, limit).map(item => ({
-        title: item.name || 'Sin titulo',
-        author: { name: item._artistName || 'Unknown' },
-        duration: item.duration || 0,
-        videoId: item.id,
-        thumbnail: item.image?.find(i => i.quality === '500x500')?.url || '',
-        source: 'saavn',
-        _score: item._score // Devolvemos el score para que el frontend vea la confianza
-    }));
+    if (passedCandidates.length === 0 && fallbackCandidates.length > 0) {
+        console.log(`[fallback] No passed candidates, using ${fallbackCandidates.length} fallback candidates`);
+        finalCandidates = fallbackCandidates;
+        usedFallback = true;
+    }
 
-    return res.status(200).json({ success: true, results: final });
+    // Ordenar por confidence final
+    finalCandidates.sort((a, b) => b._evaluation.finalConfidence - a._evaluation.finalConfidence);
+
+    // Formatear respuesta
+    const final = finalCandidates.slice(0, limit).map(item => {
+        const ev = item._evaluation;
+        return {
+            title: item.name || 'Sin título',
+            author: { name: item._artistName || 'Unknown' },
+            duration: item.duration || 0,
+            videoId: item.id,
+            thumbnail: item.image?.find(i => i.quality === '500x500')?.url ||
+                item.image?.[0]?.url || '',
+            album: item.album?.name || item.album || null,
+            source: 'saavn',
+            scores: {
+                identityScore: Math.round(ev.identityScore * 100) / 100,
+                versionScore: Math.round(ev.versionScore * 100) / 100,
+                durationScore: Math.round(ev.durationScore * 100) / 100,
+                albumScore: Math.round(ev.albumScore * 100) / 100,
+                finalConfidence: Math.round(ev.finalConfidence * 100) / 100
+            },
+            matchDetails: ev.matchDetails
+        };
+    });
+
+    // Log del mejor resultado
+    if (final.length > 0) {
+        const best = final[0];
+        console.log(`[bestMatch] "${best.title}" by ${best.author.name} | Confidence: ${best.scores.finalConfidence}${usedFallback ? ' (fallback)' : ''}`);
+
+        // ⭐ CACHE: Guardar resultado si confidence es suficiente
+        if (best.scores.finalConfidence >= MIN_CONFIDENCE_TO_CACHE) {
+            searchCache.set(cacheKey, {
+                timestamp: Date.now(),
+                result: {
+                    query: {
+                        original: qRaw,
+                        targetArtist,
+                        targetTrack,
+                        targetDuration,
+                        targetAlbum
+                    },
+                    totalCandidates: results.length,
+                    passedCandidates: passedCandidates.length,
+                    usedFallback,
+                    results: final
+                }
+            });
+            console.log(`[cache] SET for key: ${cacheKey}`);
+        }
+
+        // ❄️ FROZEN: Congelar decisión si confidence es muy alta
+        // REGLA: Congela la decisión, no el informe (menos RAM, más claridad)
+        if (best.scores.finalConfidence >= MIN_CONFIDENCE_TO_FREEZE) {
+            frozenDecisions.set(cacheKey, {
+                timestamp: Date.now(),
+                // Solo guardamos la decisión, no todo el resultado
+                frozenBest: {
+                    videoId: best.videoId,
+                    title: best.title,
+                    artist: best.author.name,
+                    confidence: best.scores.finalConfidence,
+                    duration: best.duration,
+                    thumbnail: best.thumbnail,
+                    album: best.album
+                }
+            });
+            console.log(`[❄️ frozen] SET for key: ${cacheKey} | Confidence: ${best.scores.finalConfidence}`);
+        }
+    } else {
+        console.log(`[warning] No results found for: "${qRaw}"`);
+    }
+
+    return res.status(200).json({
+        success: true,
+        source: 'api',
+        query: {
+            original: qRaw,
+            targetArtist,
+            targetTrack,
+            targetDuration,
+            targetAlbum
+        },
+        totalCandidates: results.length,
+        passedCandidates: passedCandidates.length,
+        usedFallback,
+        results: final
+    });
 }
 
 export default allowCors(handler);

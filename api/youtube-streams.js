@@ -1,5 +1,50 @@
 // api/youtube-streams.js
+/**
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 🎵 AUDIO STREAMS SERVICE - Quality-Based Selection
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * Política de calidad basada en finalConfidence:
+ * 
+ * | confidence | calidad mínima |
+ * |------------|----------------|
+ * | ≥ 0.95     | 320 kbps       |
+ * | ≥ 0.85     | 192 kbps       |
+ * | ≥ 0.70     | 128 kbps       |
+ * | < 0.70     | 96 kbps        |
+ * 
+ * REGLA: Nunca devolver streams < 96 kbps
+ */
+
 const SOURCE_API = 'https://appmusic-phi.vercel.app';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CACHE EN MEMORIA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Cache estándar de streams (10 minutos)
+const streamCache = new Map();
+const STREAM_CACHE_TTL = 1000 * 60 * 10; // 10 minutos
+
+// 🚀 PREFETCH CACHE: Para streams pre-cargados (5 minutos)
+const prefetchCache = new Map();
+const PREFETCH_TTL = 1000 * 60 * 5; // 5 minutos
+
+/**
+ * Construye clave de prefetch
+ * @param {string} videoId 
+ * @param {number} confidence 
+ */
+function buildPrefetchKey(videoId, confidence) {
+    return `${videoId}|${Math.round((confidence || 0.7) * 100)}`;
+}
+
+// Exportar para uso en api/prefetch.js
+export { prefetchCache, PREFETCH_TTL, buildPrefetchKey };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORS MIDDLEWARE
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const allowCors = (fn) => async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -13,10 +58,122 @@ const allowCors = (fn) => async (req, res) => {
     return await fn(req, res);
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// UTILIDADES DE CALIDAD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Extrae kbps desde un string de calidad
+ * Ejemplos: "320kbps" → 320, "128 kbps" → 128, "96" → 96, "unknown" → 0
+ * @param {string} quality - String de calidad
+ * @returns {number} kbps como número
+ */
+function parseKbps(quality) {
+    if (!quality) return 0;
+
+    const qualityStr = String(quality).toLowerCase().trim();
+
+    // Intentar extraer número seguido de "kbps" o "k"
+    const kbpsMatch = qualityStr.match(/(\d+)\s*(?:kbps|k(?:b)?)?/i);
+    if (kbpsMatch) {
+        return parseInt(kbpsMatch[1], 10);
+    }
+
+    // Mapeo de calidades conocidas de Saavn/JioSaavn
+    const qualityMap = {
+        '12kbps': 12,
+        '48kbps': 48,
+        '96kbps': 96,
+        '160kbps': 160,
+        '320kbps': 320,
+        'low': 48,
+        'medium': 96,
+        'high': 160,
+        'veryhigh': 320,
+        'lossless': 320,
+    };
+
+    return qualityMap[qualityStr] || 0;
+}
+
+/**
+ * Determina la calidad mínima requerida según confidence
+ * @param {number} confidence - finalConfidence del match (0-1)
+ * @returns {number} kbps mínimo requerido
+ */
+function getMinQualityForConfidence(confidence) {
+    if (confidence >= 0.95) return 320;
+    if (confidence >= 0.85) return 192;
+    if (confidence >= 0.70) return 128;
+    return 96; // Mínimo absoluto
+}
+
+/**
+ * Filtra y ordena streams según política de calidad
+ * @param {Array} streams - Array de streams disponibles
+ * @param {number} confidence - finalConfidence del match
+ * @returns {{ filtered: Array, selectedQuality: number, policy: string }}
+ */
+function selectStreamsByQuality(streams, confidence) {
+    const MIN_ABSOLUTE = 96; // NUNCA menos de 96 kbps
+    const targetMinQuality = getMinQualityForConfidence(confidence);
+
+    // 1. Parsear kbps de todos los streams
+    const parsed = streams.map(stream => ({
+        ...stream,
+        kbps: parseKbps(stream.quality)
+    }));
+
+    // 2. Filtrar streams >= 96 kbps (mínimo absoluto)
+    const validStreams = parsed.filter(s => s.kbps >= MIN_ABSOLUTE);
+
+    if (validStreams.length === 0) {
+        // Fallback: si no hay streams >= 96, usar el de mayor calidad disponible
+        const sorted = parsed.sort((a, b) => b.kbps - a.kbps);
+        if (sorted.length > 0 && sorted[0].kbps > 0) {
+            return {
+                filtered: [sorted[0]],
+                selectedQuality: sorted[0].kbps,
+                policy: 'fallback_best_available'
+            };
+        }
+        return { filtered: [], selectedQuality: 0, policy: 'no_valid_streams' };
+    }
+
+    // 3. Intentar cumplir calidad mínima según confidence
+    const qualifyingStreams = validStreams.filter(s => s.kbps >= targetMinQuality);
+
+    if (qualifyingStreams.length > 0) {
+        // Ordenar de mayor a menor calidad
+        qualifyingStreams.sort((a, b) => b.kbps - a.kbps);
+        return {
+            filtered: qualifyingStreams,
+            selectedQuality: qualifyingStreams[0].kbps,
+            policy: `confidence_${confidence >= 0.95 ? 'premium' : confidence >= 0.85 ? 'high' : 'standard'}`
+        };
+    }
+
+    // 4. Si no hay streams que cumplan el target, usar el mejor disponible >= 96
+    validStreams.sort((a, b) => b.kbps - a.kbps);
+    return {
+        filtered: validStreams,
+        selectedQuality: validStreams[0].kbps,
+        policy: 'best_available_above_minimum'
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HANDLER PRINCIPAL
+// ═══════════════════════════════════════════════════════════════════════════════
+
 async function handler(req, res) {
     const { videoId } = req.query || {};
 
-    console.log(`[youtube-streams] VideoId: "${videoId}"`);
+    // ⭐ Aceptar confidence como query param (fix: 0 es un valor válido)
+    const confidenceRaw = parseFloat(req.query.confidence);
+    const confidence = Number.isFinite(confidenceRaw) ? confidenceRaw : 0.7;
+
+    console.log(`[youtube-streams] VideoId: "${videoId}" | Confidence: ${confidence}`);
 
     if (!videoId) {
         return res.status(400).json({
@@ -26,7 +183,33 @@ async function handler(req, res) {
     }
 
     try {
-        // ✅ RUTA CORRECTA: /api/songs/{id}
+        // 🚀 PREFETCH: Verificar primero si tenemos streams pre-cargados
+        const prefetchKey = buildPrefetchKey(videoId, confidence);
+        const prefetched = prefetchCache.get(prefetchKey);
+        if (prefetched && Date.now() - prefetched.timestamp < PREFETCH_TTL) {
+            console.log(`[🚀 prefetch] HIT for: ${prefetchKey}`);
+            return res.status(200).json({
+                success: true,
+                source: 'prefetch',
+                ...prefetched.result
+            });
+        }
+
+        // ⭐ CACHE: Verificar si ya tenemos streams para este video
+        const minQuality = getMinQualityForConfidence(confidence);
+        const cacheKey = `${videoId}|${minQuality}`;
+
+        const cached = streamCache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
+            console.log(`[stream-cache] HIT for: ${cacheKey}`);
+            return res.status(200).json({
+                success: true,
+                source: 'cache',
+                ...cached.result
+            });
+        }
+
+        // Llamar a la API fuente
         const url = `${SOURCE_API}/api/songs/${videoId}`;
         console.log(`[youtube-streams] Calling: ${url}`);
 
@@ -49,7 +232,7 @@ async function handler(req, res) {
 
         const data = await response.json();
 
-        // ✅ ESTRUCTURA CORRECTA: data.data[0]
+        // Extraer datos de la canción
         const songData = data.data?.[0] || data.data || data;
 
         if (!songData) {
@@ -59,27 +242,63 @@ async function handler(req, res) {
             });
         }
 
-        // ✅ Extraer downloadUrl
-        let streams = [];
+        // Extraer downloadUrl
+        let rawStreams = [];
         const downloadLinks = songData.downloadUrl || [];
 
         if (Array.isArray(downloadLinks)) {
-            streams = downloadLinks.map(linkObj => ({
+            rawStreams = downloadLinks.map(linkObj => ({
                 url: linkObj.url,
                 quality: linkObj.quality || 'unknown',
                 format: 'mp4'
             })).filter(s => s.url);
         }
 
-        if (streams.length === 0) {
+        if (rawStreams.length === 0) {
             return res.status(404).json({
                 success: false,
                 error: 'No audio streams available'
             });
         }
 
-        console.log(`[youtube-streams] Found ${streams.length} streams`);
-        return res.status(200).json({ success: true, audioStreams: streams });
+        // ⭐ NUEVO: Seleccionar streams según política de calidad
+        const { filtered, selectedQuality, policy } = selectStreamsByQuality(rawStreams, confidence);
+
+        if (filtered.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'No audio streams meet quality requirements'
+            });
+        }
+
+        // Limpiar campo kbps interno antes de devolver (solo para uso interno)
+        const audioStreams = filtered.map(({ kbps, ...rest }) => rest);
+
+        console.log(`[youtube-streams] Selected ${audioStreams.length} streams | Quality: ${selectedQuality}kbps | Policy: ${policy}`);
+
+        // ⭐ CACHE: Guardar resultado (reusar cacheKey ya definido arriba)
+        const responseData = {
+            audioStreams,
+            qualityInfo: {
+                selectedQuality,
+                policy,
+                confidence,
+                totalAvailable: rawStreams.length,
+                filteredCount: audioStreams.length
+            }
+        };
+
+        streamCache.set(cacheKey, {
+            timestamp: Date.now(),
+            result: responseData
+        });
+        console.log(`[stream-cache] SET for: ${cacheKey}`);
+
+        return res.status(200).json({
+            success: true,
+            source: 'api',
+            ...responseData
+        });
 
     } catch (err) {
         if (err.name === 'AbortError') {
