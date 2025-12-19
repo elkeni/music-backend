@@ -849,7 +849,27 @@ function evaluateCandidate(candidate, params) {
         };
     }
 
-    // 2. ⭐ RECHAZO INMEDIATO: Versiones prohibidas (excepto remix, que se evalúa después)
+    // 2. ⭐ RECHAZO INMEDIATO: Título inválido (muy corto o ambiguo)
+    // Un track válido debe tener al menos 2 palabras O contener separadores musicales
+    // Esto bloquea: "Fred", "Audio", "Official", etc.
+    const titleWords = title.trim().split(/\s+/).filter(w => w.length > 0);
+    const hasMusicalSeparators = /[()-]/.test(title);
+
+    if (titleWords.length < 2 && !hasMusicalSeparators) {
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'title_too_short',
+            identityScore: 0,
+            versionScore: 0,
+            durationScore: 0,
+            albumScore: 0,
+            finalConfidence: 0,
+            matchDetails: { reason: `Título inválido: "${title}" (muy corto)` }
+        };
+    }
+
+    // 3. ⭐ RECHAZO INMEDIATO: Versiones prohibidas (excepto remix, que se evalúa después)
     const forbiddenVersion = detectForbiddenVersion(title, false);
     if (forbiddenVersion) {
         return {
@@ -866,10 +886,10 @@ function evaluateCandidate(candidate, params) {
         };
     }
 
-    // 3. FASE 1: Identidad Primaria
+    // 4. FASE 1: Identidad Primaria
     const phase1 = evaluatePrimaryIdentity(candidate, targetArtist, targetTitle);
 
-    // 4. ⭐ REGLA 3: Remix - rechazar solo si identidad es débil o parece cover/tribute
+    // 5. ⭐ Remix - rechazar solo si identidad es débil o parece cover/tribute
     const isRemix = /\bremix\b/i.test(title);
     if (isRemix && phase1.score < 0.6) {
         // Remix con identidad débil - verificar si es cover camuflado
@@ -890,13 +910,13 @@ function evaluateCandidate(candidate, params) {
         }
     }
 
-    // 5. FASE 2: Tipo de Versión (válida)
+    // 6. FASE 2: Tipo de Versión (válida)
     const phase2 = evaluateVersion(candidate);
 
-    // 6. FASE 3: Contexto Musical
+    // 7. FASE 3: Contexto Musical
     const phase3 = evaluateMusicalContext(candidate, targetDuration, targetAlbum);
 
-    // 7. Calcular confidence final
+    // 8. Calcular confidence final
     const weights = {
         identity: 0.50,    // Identidad es lo más importante
         version: 0.15,     // Versión
