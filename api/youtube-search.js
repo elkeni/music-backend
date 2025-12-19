@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * 🎵 MUSIC SEARCH ENGINE v3.3 - STUDIO QUALITY ONLY
+ * 🎵 MUSIC SEARCH ENGINE v3.5 - STUDIO QUALITY + CHANNEL AUTHORITY
  * ═══════════════════════════════════════════════════════════════════════════════
  * 
  * VISIÓN DEL PRODUCTO:
@@ -9,27 +9,41 @@
  * - Remixes oficiales SÍ son válidos
  * - Remasters oficiales SÍ son válidos
  * 
- * VERSIONES PROHIBIDAS (RECHAZO INMEDIATO):
- * - live, acoustic, unplugged, cover, karaoke
- * - instrumental, sped up, slowed, nightcore, tribute
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * PIPELINE v3.5 - ORDEN EXACTO, NO NEGOCIABLE
+ * ═══════════════════════════════════════════════════════════════════════════════
  * 
- * REGLA DE ORO:
- * Si la canción NO es de estudio → NO devolver
- * Si la canción ES de estudio correcta → SIEMPRE devolver
+ * FASE 0: Normalización (entrada)
+ * FASE 1: Identidad primaria (artista + título + duración)
+ * FASE 2: Detección de versión PROHIBIDA (live, cover explícito, karaoke)
+ * FASE 3: AUTORIDAD DE LA FUENTE (NUEVA - CRÍTICA) ← mata covers implícitos
+ * FASE 4: Remix oficial vs remix trucho
+ * FASE 5: Decisión FINAL (score combinado)
+ * FASE 6: Regla UX (nunca vacío, pero nunca covers)
  * 
- * REGLA CLAVE v3.2:
- * El uploader del video NO define la validez del track.
- * La identidad musical SÍ.
- * Un track es válido si:
- * - artistScore >= 0.8 AND titleScore >= 0.7 AND durationScore >= 0.8
- * - NO es versión prohibida
- * - Duración <= 15 min (no album-mix)
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * CAMBIO CLAVE v3.5: EL CANAL MANDA, NO EL TÍTULO
+ * ═══════════════════════════════════════════════════════════════════════════════
  * 
- * REGLA CLAVE v3.3 (REMIX AS PRIMARY ARTIST):
- * Si el título indica un remix oficial y el artista buscado aparece
- * como remixer en el título, el remixer puede actuar como artista principal.
- * Esto permite encontrar remixes donde el remixer es la identidad buscada.
- * Ej: "Fred again.. - Beto's Horns (fred remix)" → Fred gana identidad
+ * � AUTORIDAD DEL CANAL:
+ * - HIGH: Artista oficial, VEVO, -Topic, ℗/© en descripción
+ * - MEDIUM: Canal no oficial PERO sin flags de cover + identidad >= 0.85
+ * - LOW: Canal random sin indicadores de oficialidad
+ * 
+ * � REGLA ANTI-COVER IMPLÍCITO:
+ * Si authority = LOW && titleScore >= 0.9 && artistScore >= 0.8
+ * → RECHAZO: "implicit_cover_by_low_authority_channel"
+ * 
+ * 🎧 REMIX:
+ * - HIGH authority → aceptar
+ * - MEDIUM + artistScore >= 0.9 → aceptar
+ * - LOW → RECHAZAR siempre
+ * 
+ * 📊 SCORE FINAL:
+ * finalScore = identity.score * 0.6 + authority.score * 0.4
+ * passed = finalScore >= 0.45 || (identity >= 0.5 && duration >= 0.7 && authority !== LOW)
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════════
  */
 
 const SOURCE_API = 'https://appmusic-phi.vercel.app';
@@ -397,8 +411,30 @@ function extractArtistName(item) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ARTISTAS CONOCIDOS
+// ARTISTAS CONOCIDOS + DÚOS ESTABLES
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * DÚOS ESTABLES: Artistas que funcionan como unidad (equivalente a Daft Punk)
+ * Si aparece cualquiera de los miembros, el match es válido para el dúo.
+ */
+const KNOWN_DUOS = {
+    'ca7riel & paco amoroso': {
+        members: ['ca7riel', 'catriel', 'c47riel', 'paco amoroso', 'paco'],
+        canonicalName: 'CA7RIEL & Paco Amoroso',
+        aliases: ['ca7riel y paco amoroso', 'paco amoroso y ca7riel', 'paco amoroso & ca7riel']
+    },
+    'daft punk': {
+        members: ['daft punk', 'thomas bangalter', 'guy-manuel'],
+        canonicalName: 'Daft Punk',
+        aliases: []
+    },
+    'silk sonic': {
+        members: ['silk sonic', 'bruno mars', 'anderson paak'],
+        canonicalName: 'Silk Sonic',
+        aliases: ['anderson paak & bruno mars', 'bruno mars & anderson paak']
+    }
+};
 
 const KNOWN_ARTISTS = {
     'mana': ['mana', 'maná'],
@@ -475,8 +511,86 @@ const KNOWN_ARTISTS = {
     'junior h': ['junior h']
 };
 
+/**
+ * Detecta si el targetArtist es un DÚO ESTABLE
+ * @returns {{ isDuo: boolean, members: string[], canonicalName: string } | null}
+ */
+function detectDuo(artistString) {
+    if (!artistString) return null;
+
+    const normalized = normalize(artistString);
+
+    // Verificar si contiene separadores de dúo
+    const hasDuoSeparator = /[&]|\s+y\s+|\s+and\s+/i.test(artistString);
+
+    // Buscar en dúos conocidos
+    for (const [key, duo] of Object.entries(KNOWN_DUOS)) {
+        // Match directo por clave
+        if (normalized.includes(normalize(key))) {
+            return { isDuo: true, members: duo.members, canonicalName: duo.canonicalName };
+        }
+        // Match por aliases
+        for (const alias of duo.aliases) {
+            if (normalized.includes(normalize(alias))) {
+                return { isDuo: true, members: duo.members, canonicalName: duo.canonicalName };
+            }
+        }
+        // Match por cualquier miembro (si hay separador de dúo en query)
+        if (hasDuoSeparator) {
+            for (const member of duo.members) {
+                if (normalized.includes(normalize(member))) {
+                    return { isDuo: true, members: duo.members, canonicalName: duo.canonicalName };
+                }
+            }
+        }
+    }
+
+    // Si tiene separador pero no está en KNOWN_DUOS, tratarlo como dúo genérico
+    if (hasDuoSeparator) {
+        const parts = artistString.split(/[&]|\s+y\s+|\s+and\s+/i).map(p => p.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+            return {
+                isDuo: true,
+                members: parts.map(p => normalize(p)),
+                canonicalName: artistString
+            };
+        }
+    }
+
+    return null;
+}
+
+/**
+ * detectKnownArtist MEJORADO:
+ * - Si el query contiene & o "y" (dúo), NO lo rompe
+ * - Preserva la identidad compuesta
+ */
 function detectKnownArtist(query) {
     const qNorm = normalize(query);
+
+    // ⚠️ REGLA CRÍTICA: Si el query contiene separadores de dúo, NO limpiar
+    // Esto preserva "CA7RIEL & Paco Amoroso" como unidad
+    const hasDuoSeparator = /[&]|\s+y\s+/i.test(query);
+
+    if (hasDuoSeparator) {
+        // Detectar si es un dúo conocido
+        const duoInfo = detectDuo(query);
+        if (duoInfo) {
+            console.log(`[detectKnownArtist] DÚO DETECTADO: "${duoInfo.canonicalName}"`);
+            // Devolver el query completo como artista, sin limpiar
+            return {
+                artist: duoInfo.canonicalName,
+                track: '',  // El track se extrae de otra forma
+                isDuo: true,
+                duoMembers: duoInfo.members
+            };
+        }
+        // Dúo genérico: preservar query completo
+        console.log(`[detectKnownArtist] Dúo genérico detectado, preservando query: "${query}"`);
+        return { artist: null, track: query, isDuo: true };
+    }
+
+    // Lógica original para artistas individuales
     let bestMatch = null;
     let bestMatchLength = 0;
     let cleanQuery = query;
@@ -494,7 +608,7 @@ function detectKnownArtist(query) {
         }
     }
 
-    return { artist: bestMatch, track: cleanQuery };
+    return { artist: bestMatch, track: cleanQuery, isDuo: false };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -548,20 +662,211 @@ function isTrashContent(candidate, targetDuration = 0) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FASE 1: IDENTIDAD PRIMARIA (Más permisiva)
+// FASE 3: AUTORIDAD DE LA FUENTE (CRÍTICA - mata covers implícitos)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Palabras clave que indican cover/tributo/remake en descripción
+ * Si el canal NO es oficial y la descripción contiene estas → LOW authority
+ */
+const COVER_INDICATORS = [
+    'cover', 'tribute', 'instrumental', 'karaoke', 'acoustic',
+    'live', 'remake', 'rework', 'version', 'rendition',
+    'performed by', 'played by', 'sung by', 'covered by',
+    'mi version', 'mi versión', 'homenaje', 'dedicado a'
+];
+
+/**
+ * FASE 3: Evalúa la autoridad del canal/uploader
+ * 
+ * Niveles:
+ * - HIGH (1.0): Canal oficial del artista, VEVO, Topic, ℗/©
+ * - MEDIUM (0.6): No oficial pero sin flags de cover + identidad fuerte
+ * - LOW (0.0): Canal random sin indicadores de oficialidad
+ * 
+ * @param {Object} candidate - El candidato a evaluar
+ * @param {string} targetArtist - Artista buscado (normalizado)
+ * @param {number} identityScore - Score de identidad (de FASE 1)
+ * @returns {{ level: 'HIGH'|'MEDIUM'|'LOW', score: number, reasons: string[] }}
+ */
+function evaluateChannelAuthority(candidate, targetArtist, identityScore = 0) {
+    const result = {
+        level: 'LOW',
+        score: 0.0,
+        reasons: []
+    };
+
+    // Extraer datos del canal
+    const channelTitle = (candidate.channelTitle || candidate.subtitle || candidate.label || '').toLowerCase();
+    const description = (candidate.description || candidate.more_info?.copyright_text || '').toLowerCase();
+    const artistNorm = normalize(targetArtist || '');
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NIVEL HIGH: Canal oficial del artista
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Check 1: Canal contiene nombre del artista
+    if (artistNorm && channelTitle.includes(artistNorm)) {
+        result.level = 'HIGH';
+        result.score = 1.0;
+        result.reasons.push(`channel_contains_artist: "${channelTitle}"`);
+        return result;
+    }
+
+    // Check 2: Canal oficial (VEVO, Topic, Official)
+    if (
+        channelTitle.includes('vevo') ||
+        channelTitle.endsWith('- topic') ||
+        channelTitle.includes(' - topic') ||
+        channelTitle.includes('official')
+    ) {
+        result.level = 'HIGH';
+        result.score = 1.0;
+        result.reasons.push(`official_channel: "${channelTitle}"`);
+        return result;
+    }
+
+    // Check 3: Símbolos de copyright en descripción
+    if (description.includes('℗') || description.includes('©')) {
+        result.level = 'HIGH';
+        result.score = 1.0;
+        result.reasons.push('copyright_symbols_in_description');
+        return result;
+    }
+
+    // Check 4: Label conocido
+    const knownLabels = [
+        'sony music', 'universal music', 'warner music', 'emi',
+        'atlantic', 'columbia', 'interscope', 'def jam', 'republic',
+        'rca records', 'capitol records', 'island records'
+    ];
+    for (const label of knownLabels) {
+        if (channelTitle.includes(label) || description.includes(label)) {
+            result.level = 'HIGH';
+            result.score = 1.0;
+            result.reasons.push(`known_label: "${label}"`);
+            return result;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NIVEL MEDIUM: No oficial pero sin flags de cover + identidad fuerte
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Verificar si el canal/descripción tiene indicadores de cover
+    let hasCoverIndicators = false;
+    for (const indicator of COVER_INDICATORS) {
+        if (channelTitle.includes(indicator) || description.includes(indicator)) {
+            hasCoverIndicators = true;
+            result.reasons.push(`cover_indicator: "${indicator}"`);
+            break;
+        }
+    }
+
+    // MEDIUM: Sin flags de cover Y identidad >= 0.85
+    if (!hasCoverIndicators && identityScore >= 0.85) {
+        result.level = 'MEDIUM';
+        result.score = 0.6;
+        result.reasons.push(`no_cover_flags_high_identity: ${identityScore.toFixed(2)}`);
+        return result;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NIVEL LOW: Canal random sin indicadores de oficialidad
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    result.level = 'LOW';
+    result.score = 0.0;
+    result.reasons.push(`no_authority_indicators`);
+    if (hasCoverIndicators) {
+        result.reasons.push('has_cover_indicators');
+    }
+
+    return result;
+}
+
+/**
+ * FASE 3.2: Detecta covers IMPLÍCITOS
+ * 
+ * REGLA: Si el canal tiene LOW authority PERO el título/artista matchean perfectamente,
+ * es casi seguro que es un cover (JuanitoGuitar subiendo "Radiohead - Creep")
+ * 
+ * @param {Object} authority - Resultado de evaluateChannelAuthority
+ * @param {number} titleScore - Score del título (de FASE 1)
+ * @param {number} artistScore - Score del artista (de FASE 1)
+ * @returns {{ isImplicitCover: boolean, reason: string|null }}
+ */
+function detectImplicitCover(authority, titleScore, artistScore) {
+    // REGLA CRÍTICA: Authority LOW + scores altos = cover implícito
+    if (
+        authority.level === 'LOW' &&
+        titleScore >= 0.9 &&
+        artistScore >= 0.8
+    ) {
+        return {
+            isImplicitCover: true,
+            reason: `implicit_cover_by_low_authority_channel (title: ${titleScore.toFixed(2)}, artist: ${artistScore.toFixed(2)})`
+        };
+    }
+
+    return { isImplicitCover: false, reason: null };
+}
+
+/**
+ * FASE 4: Evalúa si un remix es oficial o trucho
+ * 
+ * REGLAS:
+ * - HIGH authority → aceptar
+ * - MEDIUM + artistScore >= 0.9 → aceptar  
+ * - LOW → RECHAZAR siempre (no existe remix válido de canal random)
+ * 
+ * @param {boolean} isRemix - Si el título contiene "remix"
+ * @param {Object} authority - Resultado de evaluateChannelAuthority
+ * @param {number} artistScore - Score del artista
+ * @returns {{ isValid: boolean, reason: string }}
+ */
+function evaluateRemixValidity(isRemix, authority, artistScore) {
+    if (!isRemix) {
+        return { isValid: true, reason: 'not_a_remix' };
+    }
+
+    if (authority.level === 'HIGH') {
+        return { isValid: true, reason: 'official_remix_high_authority' };
+    }
+
+    if (authority.level === 'MEDIUM' && artistScore >= 0.9) {
+        return { isValid: true, reason: 'semi_official_remix_medium_authority' };
+    }
+
+    return {
+        isValid: false,
+        reason: `unofficial_remix_${authority.level.toLowerCase()}_authority`
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FASE 1: IDENTIDAD PRIMARIA (Corregida para DÚOS)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * FASE 1: Confirma título y artista
- * REGLA: Si artistScore >= 0.8, NO rechazar aunque titleScore sea bajo
- * El título NO puede ser el único motivo de rechazo
+ * 
+ * REGLA DÚOS (v3.4):
+ * Si targetArtist es un DÚO (contiene & / y / and):
+ * - artistScore >= 0.85 si coincide AL MENOS UNO de los miembros
+ * - artistScore = 1.0 si coinciden AMBOS
+ * - NUNCA penalizar por no aparecer juntos
+ * 
+ * Esto corrige el problema CA7RIEL & Paco Amoroso donde YouTube
+ * puede tener "CA7RIEL, Paco Amoroso" o "Paco Amoroso & CA7RIEL"
  */
 function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     const details = {
         titleMatch: 'none',
         artistMatch: 'none',
         titleScore: 0,
-        artistScore: 0
+        artistScore: 0,
+        isDuoMatch: false
     };
 
     // === TÍTULO ===
@@ -588,10 +893,10 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
             details.titleScore = titleRatio;
         } else if (titleRatio > 0) {
             details.titleMatch = 'weak';
-            details.titleScore = titleRatio * 0.7; // Menos penalización
+            details.titleScore = titleRatio * 0.7;
         } else {
             details.titleMatch = 'none';
-            details.titleScore = 0.2; // Mínimo para no hundir el score
+            details.titleScore = 0.2;
         }
     }
 
@@ -599,16 +904,66 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     const candidateArtist = normalize(extractArtistName(candidate) || '');
     const candidateArtistList = splitArtists(candidateArtist);
     const targetArtistNorm = normalize(targetArtist || '');
-    const targetArtistList = splitArtists(targetArtist || '');
+
+    // ⭐ DETECCIÓN DE DÚO
+    const duoInfo = detectDuo(targetArtist);
+    const isDuo = duoInfo !== null;
 
     if (!targetArtistNorm) {
         details.artistMatch = 'unknown';
-        details.artistScore = 0.6; // Sin target, asumimos neutral-positivo
+        details.artistScore = 0.6;
+    } else if (isDuo) {
+        // ═══════════════════════════════════════════════════════════════════
+        // 🎭 LÓGICA ESPECIAL PARA DÚOS
+        // ═══════════════════════════════════════════════════════════════════
+        details.isDuoMatch = true;
+        const duoMembers = duoInfo.members;
+        let matchedMembers = 0;
+
+        // Contar cuántos miembros del dúo aparecen en el candidato
+        for (const member of duoMembers) {
+            const memberNorm = normalize(member);
+            // Verificar en lista de artistas del candidato
+            for (const candA of candidateArtistList) {
+                if (candA.includes(memberNorm) || memberNorm.includes(candA)) {
+                    matchedMembers++;
+                    break;
+                }
+            }
+            // También verificar en string completo
+            if (candidateArtist.includes(memberNorm)) {
+                matchedMembers = Math.max(matchedMembers, 1);
+            }
+        }
+
+        // También verificar si el candidato contiene el nombre completo del dúo
+        if (candidateArtist.includes(normalize(duoInfo.canonicalName))) {
+            matchedMembers = duoMembers.length; // Match completo
+        }
+
+        // REGLA DÚO:
+        // - Al menos 1 miembro → artistScore 0.85 (FUERTE)
+        // - Ambos miembros → artistScore 1.0 (PERFECTO)
+        if (matchedMembers >= 2 || matchedMembers === duoMembers.length) {
+            details.artistMatch = 'duo_full';
+            details.artistScore = 1.0;
+            console.log(`[duo] MATCH COMPLETO: ${duoInfo.canonicalName} en "${candidateArtist}"`);
+        } else if (matchedMembers >= 1) {
+            details.artistMatch = 'duo_partial';
+            details.artistScore = 0.85; // ⭐ NO penalizar por solo uno
+            console.log(`[duo] MATCH PARCIAL (${matchedMembers}/${duoMembers.length}): ${duoInfo.canonicalName} en "${candidateArtist}"`);
+        } else {
+            details.artistMatch = 'none';
+            details.artistScore = 0.1;
+        }
     } else {
+        // ═══════════════════════════════════════════════════════════════════
+        // LÓGICA ORIGINAL PARA ARTISTAS INDIVIDUALES
+        // ═══════════════════════════════════════════════════════════════════
+        const targetArtistList = splitArtists(targetArtist || '');
         let foundExact = false;
         let foundPartial = false;
 
-        // Buscar en lista de artistas
         for (const targetA of targetArtistList.length > 0 ? targetArtistList : [targetArtistNorm]) {
             for (const candA of candidateArtistList) {
                 if (candA === targetA || candA.includes(targetA) || targetA.includes(candA)) {
@@ -625,12 +980,10 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
             if (foundExact) break;
         }
 
-        // También verificar en string completo
         if (!foundExact && (candidateArtist.includes(targetArtistNorm) || targetArtistNorm.includes(candidateArtist))) {
             foundExact = true;
         }
 
-        // Verificar en featuring del título
         if (!foundExact && !foundPartial) {
             const featuring = extractFeaturing(candidate.name || '');
             for (const feat of featuring) {
@@ -647,7 +1000,7 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
             details.artistScore = 1.0;
         } else if (foundPartial) {
             details.artistMatch = 'partial';
-            details.artistScore = 0.8; // Subido de 0.7 para dúos/colaboraciones (CA7RIEL & Paco, etc.)
+            details.artistScore = 0.8;
         } else {
             details.artistMatch = 'none';
             details.artistScore = 0.1;
@@ -820,38 +1173,46 @@ function evaluateMusicalContext(candidate, targetDuration, targetAlbum) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// EVALUACIÓN COMPLETA DE CANDIDATO
+// EVALUACIÓN COMPLETA DE CANDIDATO v3.5 (Pipeline con Authority)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Evalúa un candidato completo
- * Orden de rechazo:
+ * Evalúa un candidato usando el pipeline v3.5
+ * 
+ * ORDEN EXACTO (NO NEGOCIABLE):
  * 1. Contenido basura → RECHAZO
- * 2. Versión prohibida (live, cover, etc.) → RECHAZO
- * 3. Evaluación de identidad, versión, contexto → SCORE
+ * 2. Título inválido → RECHAZO
+ * 3. FASE 1: Identidad Primaria (artista + título)
+ * 4. FASE 2: Versión prohibida (live, cover explícito, karaoke) → RECHAZO
+ * 5. FASE 3: Autoridad del Canal ← NUEVA FASE CRÍTICA
+ * 6. FASE 3.2: Cover implícito (authority LOW + scores altos) → RECHAZO
+ * 7. FASE 4: Remix válido (solo HIGH/MEDIUM authority)
+ * 8. Contexto Musical (duración)
+ * 9. FASE 5: Decisión FINAL (identity * 0.6 + authority * 0.4)
  */
 function evaluateCandidate(candidate, params) {
     const { targetArtist, targetTitle, targetDuration, targetAlbum } = params;
     const title = candidate.name || '';
 
-    // 1. PRE-FILTRO: Contenido basura
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRE-FILTRO 1: Contenido basura
+    // ═══════════════════════════════════════════════════════════════════════════
     if (isTrashContent(candidate, targetDuration)) {
         return {
             passed: false,
             rejected: true,
             rejectReason: 'trash_content',
             identityScore: 0,
-            versionScore: 0,
-            durationScore: 0,
-            albumScore: 0,
+            authorityScore: 0,
+            authorityLevel: 'LOW',
             finalConfidence: 0,
             matchDetails: { reason: 'Contenido basura' }
         };
     }
 
-    // 2. ⭐ RECHAZO INMEDIATO: Título inválido (muy corto o ambiguo)
-    // Un track válido debe tener al menos 2 palabras O contener separadores musicales
-    // Esto bloquea: "Fred", "Audio", "Official", etc.
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRE-FILTRO 2: Título inválido (muy corto)
+    // ═══════════════════════════════════════════════════════════════════════════
     const titleWords = title.trim().split(/\s+/).filter(w => w.length > 0);
     const hasMusicalSeparators = /[()-]/.test(title);
 
@@ -861,15 +1222,23 @@ function evaluateCandidate(candidate, params) {
             rejected: true,
             rejectReason: 'title_too_short',
             identityScore: 0,
-            versionScore: 0,
-            durationScore: 0,
-            albumScore: 0,
+            authorityScore: 0,
+            authorityLevel: 'LOW',
             finalConfidence: 0,
             matchDetails: { reason: `Título inválido: "${title}" (muy corto)` }
         };
     }
 
-    // 3. ⭐ RECHAZO INMEDIATO: Versiones prohibidas (excepto remix, que se evalúa después)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FASE 1: IDENTIDAD PRIMARIA
+    // ═══════════════════════════════════════════════════════════════════════════
+    const phase1 = evaluatePrimaryIdentity(candidate, targetArtist, targetTitle);
+    const artistScore = phase1.details.artistScore;
+    const titleScore = phase1.details.titleScore;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FASE 2: VERSIÓN PROHIBIDA (live, cover explícito, karaoke)
+    // ═══════════════════════════════════════════════════════════════════════════
     const forbiddenVersion = detectForbiddenVersion(title, false);
     if (forbiddenVersion) {
         return {
@@ -877,102 +1246,116 @@ function evaluateCandidate(candidate, params) {
             rejected: true,
             rejectReason: 'forbidden_version',
             forbiddenType: forbiddenVersion,
-            identityScore: 0,
-            versionScore: 0,
-            durationScore: 0,
-            albumScore: 0,
+            identityScore: phase1.score,
+            authorityScore: 0,
+            authorityLevel: 'LOW',
             finalConfidence: 0,
             matchDetails: { reason: `Versión prohibida: ${forbiddenVersion}` }
         };
     }
 
-    // 4. FASE 1: Identidad Primaria
-    const phase1 = evaluatePrimaryIdentity(candidate, targetArtist, targetTitle);
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FASE 3: AUTORIDAD DEL CANAL (CRÍTICA)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const authority = evaluateChannelAuthority(candidate, targetArtist, phase1.score);
 
-    // 5. ⭐ Remix - rechazar solo si identidad es débil o parece cover/tribute
-    const isRemix = /\bremix\b/i.test(title);
-    if (isRemix && phase1.score < 0.6) {
-        // Remix con identidad débil - verificar si es cover camuflado
-        const lowerTitle = title.toLowerCase();
-        const isCoverRemix = /\b(cover|tribute|style\s*of)\b/i.test(lowerTitle);
-        if (isCoverRemix || phase1.score < 0.35) {
-            return {
-                passed: false,
-                rejected: true,
-                rejectReason: 'weak_remix',
-                identityScore: phase1.score,
-                versionScore: 0,
-                durationScore: 0,
-                albumScore: 0,
-                finalConfidence: 0,
-                matchDetails: { reason: `Remix con identidad débil (${phase1.score.toFixed(2)})` }
-            };
-        }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FASE 3.2: COVER IMPLÍCITO (authority LOW + scores altos = cover)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const implicitCover = detectImplicitCover(authority, titleScore, artistScore);
+    if (implicitCover.isImplicitCover) {
+        console.log(`[reject] "${title}" - ${implicitCover.reason}`);
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'implicit_cover',
+            identityScore: phase1.score,
+            authorityScore: authority.score,
+            authorityLevel: authority.level,
+            finalConfidence: 0,
+            matchDetails: {
+                reason: implicitCover.reason,
+                authorityReasons: authority.reasons
+            }
+        };
     }
 
-    // 6. FASE 2: Tipo de Versión (válida)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FASE 4: REMIX VÁLIDO (solo con autoridad HIGH/MEDIUM)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const isRemix = /\bremix\b/i.test(title);
+    const remixValidity = evaluateRemixValidity(isRemix, authority, artistScore);
+
+    if (!remixValidity.isValid) {
+        console.log(`[reject] "${title}" - ${remixValidity.reason}`);
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'unofficial_remix',
+            identityScore: phase1.score,
+            authorityScore: authority.score,
+            authorityLevel: authority.level,
+            finalConfidence: 0,
+            matchDetails: {
+                reason: remixValidity.reason,
+                authorityReasons: authority.reasons
+            }
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CONTEXTO MUSICAL (duración, álbum)
+    // ═══════════════════════════════════════════════════════════════════════════
     const phase2 = evaluateVersion(candidate);
-
-    // 7. FASE 3: Contexto Musical
     const phase3 = evaluateMusicalContext(candidate, targetDuration, targetAlbum);
-
-    // 8. Calcular confidence final
-    const weights = {
-        identity: 0.50,    // Identidad es lo más importante
-        version: 0.15,     // Versión
-        context: 0.35      // Contexto (duración principalmente)
-    };
-
-    const finalConfidence =
-        (phase1.score * weights.identity) +
-        (phase2.score * weights.version) +
-        (phase3.score * weights.context);
-
-    // 8. ⭐ REGLA DE PASO v3.2: Basada en identidad musical
-    // 
-    // NUEVA REGLA: Aceptar track si identidad musical es clara,
-    // independientemente del canal/uploader.
-    //
-    // Criterios de aceptación:
-    // - artistScore >= 0.8 AND titleScore >= 0.7 AND durationScore >= 0.8 (identidad fuerte)
-    // - O: identityScore >= 0.4 (regla anterior)
-    // - O: identityScore >= 0.3 AND durationScore >= 0.7 (regla anterior)
-    //
-    const artistScore = phase1.details.artistScore;
-    const titleScore = phase1.details.titleScore;
     const durationScore = phase3.details.durationScore;
 
-    // Regla de identidad musical fuerte (para subidas no oficiales)
-    const hasStrongMusicalIdentity =
-        artistScore >= 0.8 &&
-        titleScore >= 0.7 &&
-        durationScore >= 0.8;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FASE 5: DECISIÓN FINAL (identity * 0.6 + authority * 0.4)
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    // Reglas anteriores
-    const passesIdentityThreshold = phase1.score >= 0.4;
-    const passesWithDuration = phase1.score >= 0.3 && durationScore >= 0.7;
+    // Score combinado con Authority
+    const finalScore = (phase1.score * 0.6) + (authority.score * 0.4);
 
-    const passed = hasStrongMusicalIdentity || passesIdentityThreshold || passesWithDuration;
+    // Reglas de paso:
+    // 1. finalScore >= 0.45
+    // 2. O: identity >= 0.5 AND duration >= 0.7 AND authority !== LOW
+    const passed =
+        finalScore >= 0.45 ||
+        (phase1.score >= 0.5 && durationScore >= 0.7 && authority.level !== 'LOW');
+
+    // Log detallado para debugging
+    if (passed) {
+        console.log(`[accept] "${title}" | identity: ${phase1.score.toFixed(2)} | authority: ${authority.level} (${authority.score.toFixed(2)}) | final: ${finalScore.toFixed(2)}`);
+    }
 
     return {
         passed,
-        rejected: false, // No rechazado, solo no pasó el umbral
+        rejected: false,
         rejectReason: null,
         identityScore: phase1.score,
         versionScore: phase2.score,
-        durationScore: phase3.details.durationScore,
+        durationScore: durationScore,
         albumScore: phase3.details.albumScore,
-        finalConfidence,
+        authorityScore: authority.score,
+        authorityLevel: authority.level,
+        finalConfidence: finalScore,
         matchDetails: {
             titleMatch: phase1.details.titleMatch,
             artistMatch: phase1.details.artistMatch,
             titleScore: phase1.details.titleScore,
             artistScore: phase1.details.artistScore,
+            isDuoMatch: phase1.details.isDuoMatch,
             version: phase2.details.version,
             featuring: phase2.details.featuring,
             durationDiff: phase3.details.durationDiff,
             isCompilation: phase3.details.isCompilation,
-            hasStrongMusicalIdentity // ⭐ Nuevo: indica si pasó por identidad fuerte
+            authority: {
+                level: authority.level,
+                score: authority.score,
+                reasons: authority.reasons
+            },
+            remixValidity: remixValidity.reason
         }
     };
 }
@@ -1003,7 +1386,54 @@ async function searchApi(query, limit) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HANDLER PRINCIPAL
+// GENERADOR DE QUERIES DE REINTENTO INTELIGENTE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Genera secuencia de queries degradadas para reintentos.
+ * Orden: artist+track → track+artist → track only → artist only
+ * NUNCA relajar filtros de calidad.
+ */
+function generateRetryQueries(artist, track, originalQuery) {
+    const queries = [];
+    const artistNorm = (artist || '').trim();
+    const trackNorm = (track || '').trim();
+
+    // 1. Query original (ya intentada)
+    // queries.push(originalQuery); // No incluir, ya se intentó
+
+    // 2. artist + track (si ambos existen)
+    if (artistNorm && trackNorm) {
+        queries.push(`${artistNorm} ${trackNorm}`);
+    }
+
+    // 3. track + artist (orden invertido)
+    if (trackNorm && artistNorm) {
+        queries.push(`${trackNorm} ${artistNorm}`);
+    }
+
+    // 4. Solo track (sin artista)
+    if (trackNorm && trackNorm.length > 2) {
+        queries.push(trackNorm);
+    }
+
+    // 5. Solo artista (último recurso, puede dar resultado genérico)
+    if (artistNorm && artistNorm.length > 2) {
+        queries.push(artistNorm);
+    }
+
+    // Eliminar duplicados manteniendo orden
+    const seen = new Set([originalQuery.toLowerCase()]);
+    return queries.filter(q => {
+        const lower = q.toLowerCase();
+        if (seen.has(lower)) return false;
+        seen.add(lower);
+        return true;
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HANDLER PRINCIPAL (con reintentos inteligentes)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function handler(req, res) {
@@ -1020,14 +1450,20 @@ async function handler(req, res) {
 
     // Detección inteligente de artista si no viene explícito
     let searchQuery = qRaw;
+    let detectedDuo = null;
+
     if (!targetArtist) {
         const detected = detectKnownArtist(qRaw);
         if (detected.artist) {
-            console.log(`[SmartSearch] Detected Artist: "${detected.artist}" | Track: "${detected.track}"`);
+            console.log(`[SmartSearch] Detected Artist: "${detected.artist}"${detected.isDuo ? ' (DÚO)' : ''} | Track: "${detected.track}"`);
             targetArtist = detected.artist;
             targetTrack = detected.track || targetTrack;
+            detectedDuo = detected.isDuo ? detected : null;
 
-            if (!detected.track || detected.track.length < 2) {
+            // ⚠️ Para DÚOS: NO limpiar la query, usar completa
+            if (detected.isDuo) {
+                searchQuery = qRaw; // Preservar query original con ambos artistas
+            } else if (!detected.track || detected.track.length < 2) {
                 searchQuery = qRaw;
             } else {
                 searchQuery = `${detected.artist} ${detected.track}`;
@@ -1118,22 +1554,77 @@ async function handler(req, res) {
             // Pasó el filtro
             passedCandidates.push(item);
         } else {
-            // No pasó pero es válido (para fallback)
-            // Solo agregar si tiene identityScore decente
-            if (evaluation.identityScore >= 0.35) {
+            // ═══════════════════════════════════════════════════════════════════
+            // FASE 6 (UX): Fallback pero NUNCA covers
+            // ═══════════════════════════════════════════════════════════════════
+            // Solo agregar a fallback si:
+            // 1. identityScore >= 0.35
+            // 2. authority !== LOW (CRÍTICO: nunca devolver covers)
+            if (evaluation.identityScore >= 0.35 && evaluation.authorityLevel !== 'LOW') {
                 fallbackCandidates.push(item);
             }
         }
     }
 
-    // ⭐ REGLA 6: Nunca devolver 0 resultados
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ⭐ REGLA 6 MEJORADA: REINTENTOS INTELIGENTES + NUNCA COVERS
+    // ═══════════════════════════════════════════════════════════════════════════════
     let finalCandidates = passedCandidates;
     let usedFallback = false;
+    let usedRetry = false;
+    let retryQuery = null;
 
+    // Fallback: usar solo candidatos con authority !== LOW
     if (passedCandidates.length === 0 && fallbackCandidates.length > 0) {
-        console.log(`[fallback] No passed candidates, using ${fallbackCandidates.length} fallback candidates`);
+        console.log(`[fallback] No passed candidates, using ${fallbackCandidates.length} fallback candidates (authority != LOW)`);
         finalCandidates = fallbackCandidates;
         usedFallback = true;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // 🔄 REINTENTOS INTELIGENTES: Si aún no hay resultados, probar queries degradadas
+    // ═══════════════════════════════════════════════════════════════════════════════
+    if (finalCandidates.length === 0) {
+        const retryQueries = generateRetryQueries(targetArtist, targetTrack || qRaw, searchQuery);
+
+        console.log(`[retry] No results with primary query. Trying ${retryQueries.length} alternate queries...`);
+
+        for (const altQuery of retryQueries) {
+            console.log(`[retry] Trying: "${altQuery}"`);
+
+            const retryResults = await searchApi(altQuery, 25);
+
+            if (retryResults.length === 0) continue;
+
+            // Evaluar con los MISMOS parámetros (no relajar filtros)
+            for (const item of retryResults) {
+                const evaluation = evaluateCandidate(item, evaluationParams);
+                item._evaluation = evaluation;
+                item._artistName = extractArtistName(item);
+
+                if (evaluation.passed) {
+                    finalCandidates.push(item);
+                } else if (evaluation.identityScore >= 0.35 && !evaluation.rejected) {
+                    fallbackCandidates.push(item);
+                }
+            }
+
+            // Si encontramos resultados válidos, detenernos
+            if (finalCandidates.length > 0) {
+                usedRetry = true;
+                retryQuery = altQuery;
+                console.log(`[retry] SUCCESS with "${altQuery}": ${finalCandidates.length} candidates`);
+                break;
+            }
+        }
+
+        // Si aún no hay passed pero hay fallback del retry, usarlos
+        if (finalCandidates.length === 0 && fallbackCandidates.length > 0) {
+            console.log(`[retry-fallback] Using ${fallbackCandidates.length} fallback candidates from retries`);
+            finalCandidates = fallbackCandidates;
+            usedFallback = true;
+            usedRetry = true;
+        }
     }
 
     // Ordenar por confidence final
@@ -1165,7 +1656,8 @@ async function handler(req, res) {
     // Log del mejor resultado
     if (final.length > 0) {
         const best = final[0];
-        console.log(`[bestMatch] "${best.title}" by ${best.author.name} | Confidence: ${best.scores.finalConfidence}${usedFallback ? ' (fallback)' : ''}`);
+        const sourceNote = usedRetry ? ` (retry: "${retryQuery}")` : (usedFallback ? ' (fallback)' : '');
+        console.log(`[bestMatch] "${best.title}" by ${best.author.name} | Confidence: ${best.scores.finalConfidence}${sourceNote}`);
 
         // ⭐ CACHE: Guardar resultado si confidence es suficiente
         if (best.scores.finalConfidence >= MIN_CONFIDENCE_TO_CACHE) {
@@ -1182,6 +1674,8 @@ async function handler(req, res) {
                     totalCandidates: results.length,
                     passedCandidates: passedCandidates.length,
                     usedFallback,
+                    usedRetry,
+                    retryQuery,
                     results: final
                 }
             });
@@ -1189,11 +1683,9 @@ async function handler(req, res) {
         }
 
         // ❄️ FROZEN: Congelar decisión si confidence es muy alta
-        // REGLA: Congela la decisión, no el informe (menos RAM, más claridad)
         if (best.scores.finalConfidence >= MIN_CONFIDENCE_TO_FREEZE) {
             frozenDecisions.set(cacheKey, {
                 timestamp: Date.now(),
-                // Solo guardamos la decisión, no todo el resultado
                 frozenBest: {
                     videoId: best.videoId,
                     title: best.title,
@@ -1207,12 +1699,13 @@ async function handler(req, res) {
             console.log(`[❄️ frozen] SET for key: ${cacheKey} | Confidence: ${best.scores.finalConfidence}`);
         }
     } else {
-        console.log(`[warning] No results found for: "${qRaw}"`);
+        // ⚠️ SOLO ahora, después de TODOS los reintentos, declarar "no encontrado"
+        console.log(`[ERROR] No results found after all retries for: "${qRaw}"`);
     }
 
     return res.status(200).json({
         success: true,
-        source: 'api',
+        source: usedRetry ? 'retry' : 'api',
         query: {
             original: qRaw,
             targetArtist,
@@ -1223,6 +1716,8 @@ async function handler(req, res) {
         totalCandidates: results.length,
         passedCandidates: passedCandidates.length,
         usedFallback,
+        usedRetry,
+        retryQuery,
         results: final
     });
 }
