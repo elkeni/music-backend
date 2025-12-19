@@ -647,7 +647,7 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
             details.artistScore = 1.0;
         } else if (foundPartial) {
             details.artistMatch = 'partial';
-            details.artistScore = 0.7;
+            details.artistScore = 0.8; // Subido de 0.7 para dúos/colaboraciones (CA7RIEL & Paco, etc.)
         } else {
             details.artistMatch = 'none';
             details.artistScore = 0.1;
@@ -672,7 +672,7 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     // 3. El nombre del artista buscado debe aparecer en el título del candidato
     // 4. NO es live/cover/bootleg (ya filtrado antes)
     // ═══════════════════════════════════════════════════════════════════════════
-    const isRemix = /\bremix\b/i.test(candidateTitle);
+    const isRemix = /\bremix\b/i.test(candidate.name || ''); // Usar título original, no limpiado
 
     if (isRemix && details.artistScore < 0.5 && targetArtistNorm) {
         // Verificar si el artista buscado aparece en el título (como remixer)
