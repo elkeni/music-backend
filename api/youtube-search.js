@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * 🎵 MUSIC SEARCH ENGINE v3.2 - STUDIO QUALITY ONLY
+ * 🎵 MUSIC SEARCH ENGINE v3.3 - STUDIO QUALITY ONLY
  * ═══════════════════════════════════════════════════════════════════════════════
  * 
  * VISIÓN DEL PRODUCTO:
@@ -24,6 +24,12 @@
  * - artistScore >= 0.8 AND titleScore >= 0.7 AND durationScore >= 0.8
  * - NO es versión prohibida
  * - Duración <= 15 min (no album-mix)
+ * 
+ * REGLA CLAVE v3.3 (REMIX AS PRIMARY ARTIST):
+ * Si el título indica un remix oficial y el artista buscado aparece
+ * como remixer en el título, el remixer puede actuar como artista principal.
+ * Esto permite encontrar remixes donde el remixer es la identidad buscada.
+ * Ej: "Fred again.. - Beto's Horns (fred remix)" → Fred gana identidad
  */
 
 const SOURCE_API = 'https://appmusic-phi.vercel.app';
@@ -645,6 +651,42 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
         } else {
             details.artistMatch = 'none';
             details.artistScore = 0.1;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 🎧 REGLA REMIX AS PRIMARY ARTIST
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Si el título indica un remix oficial y el artista buscado aparece como
+    // remixer en el título, se permite que el remixer actúe como artista principal.
+    // 
+    // Caso de uso: "Fred again.. - Beto's Horns (fred remix)"
+    // - Fred again.. es el remixer, NO el artista original
+    // - En YouTube aparece como "Beto's Horns (Fred Again.. Remix)"
+    // - Sin esta regla: artistScore cae porque Fred no es artista principal
+    // - Con esta regla: Fred gana identidad porque el título lo respalda
+    //
+    // CONDICIONES SEGURAS:
+    // 1. El título debe contener "remix" (versión válida)
+    // 2. El artistScore actual debe ser bajo (< 0.5)
+    // 3. El nombre del artista buscado debe aparecer en el título del candidato
+    // 4. NO es live/cover/bootleg (ya filtrado antes)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const isRemix = /\bremix\b/i.test(candidateTitle);
+
+    if (isRemix && details.artistScore < 0.5 && targetArtistNorm) {
+        // Verificar si el artista buscado aparece en el título (como remixer)
+        const artistInTitle = candidateTitle.includes(targetArtistNorm);
+
+        // También verificar tokens individuales para nombres compuestos
+        // Ej: "fred again" -> verificar si "fred" y "again" están en el título
+        const targetArtistTokens = targetArtistNorm.split(' ').filter(t => t.length > 2);
+        const tokenMatchRatio = targetArtistTokens.filter(t => candidateTitle.includes(t)).length / targetArtistTokens.length;
+
+        if (artistInTitle || tokenMatchRatio >= 0.7) {
+            // Boost artistScore: el remixer es identidad válida
+            details.artistScore = Math.max(details.artistScore, 0.7);
+            details.artistMatch = 'remixer';
         }
     }
 
