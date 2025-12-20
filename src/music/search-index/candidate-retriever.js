@@ -163,9 +163,11 @@ export async function searchCandidatesByQuery(query, limit = DEFAULT_CANDIDATE_L
 
 /**
  * Verifica si el retriever está disponible
+ * En serverless, verificamos la configuración, ya que la conexión es lazy.
  * 
  * @returns {boolean}
  */
 export function isCandidateRetrieverAvailable() {
-    return isMeiliEnabled() && getSongsIndex() !== null;
+    // Si tenemos la URL, asumimos que está disponible y dejamos que initMeili conecte
+    return !!process.env.MEILI_URL;
 }

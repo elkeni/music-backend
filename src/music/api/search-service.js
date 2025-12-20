@@ -197,9 +197,10 @@ async function setCached(cacheKey, value) {
  * Lógica movida a runtime para asegurar que lee process.env actualizado
  * 
  * @param {import('../ranking/search-context.js').SearchContext} searchContext
+ * @param {boolean} [debug=false]
  * @returns {Promise<import('../song-model.js').Song[]>}
  */
-async function getCandidateSongs(searchContext) {
+async function getCandidateSongs(searchContext, debug = false) {
     // 1. Selector de estrategia en runtime
     // Solo si el módulo cargó Y está disponible (el retriever hace su check interno de process.env)
     const useMeili = _candidateRetrieverModule && _candidateRetrieverModule.isCandidateRetrieverAvailable();
@@ -207,7 +208,7 @@ async function getCandidateSongs(searchContext) {
     // Intentar usar Meilisearch para candidatos
     if (useMeili) {
         try {
-            const candidateIds = await _candidateRetrieverModule.getCandidateSongIds(searchContext, CANDIDATE_LIMIT);
+            const candidateIds = await _candidateRetrieverModule.getCandidateSongIds(searchContext, CANDIDATE_LIMIT, debug);
 
             if (candidateIds && candidateIds.length > 0) {
                 // Obtener canciones por IDs desde DB o fallback
@@ -393,7 +394,7 @@ export async function searchSongs(query, options = {}) {
     const searchContext = buildSearchContext(query);
 
     // 2. Get candidate songs (FASE 6: Meilisearch → fallback getAllSongs)
-    const candidateSongs = await getCandidateSongs(searchContext);
+    const candidateSongs = await getCandidateSongs(searchContext, normalizedOptions.debug);
 
     // 3. Rank results (SIN CAMBIOS - usa mismo ranking de FASE 4)
     const rankedResults = rankResults(candidateSongs, searchContext);
