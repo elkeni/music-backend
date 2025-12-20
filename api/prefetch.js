@@ -1,4 +1,3 @@
-// api/prefetch.js
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
  * 🚀 PREFETCH SERVICE - Pre-carga de streams para reproducción instantánea
@@ -22,6 +21,10 @@
  * RESPUESTA:
  * { success: true/false } (no devuelve streams, solo prepara)
  */
+
+export const config = {
+    runtime: 'nodejs'
+};
 
 const SOURCE_API = 'https://appmusic-phi.vercel.app';
 const BACKEND_URL = process.env.VERCEL_URL
