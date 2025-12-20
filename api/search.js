@@ -15,15 +15,37 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-export const config = { runtime: 'nodejs' };
-
-import { searchSongs } from '../src/music/api/search-service.js';
+export const config = {
+    runtime: 'nodejs',
+};
 
 export default async function handler(req, res) {
-    const { q, debug } = req.query;
-    const result = await searchSongs(q, { debug: debug === 'true' });
-    res.status(200).json(result);
+    try {
+        const { q, debug } = req.query;
+
+        // 👇 IMPORT DINÁMICO (CRÍTICO)
+        const { searchSongs } = await import(
+            '../src/music/api/search-service.js'
+        );
+
+        const result = await searchSongs(q, {
+            debug: debug === 'true',
+        });
+
+        res.status(200).json(result);
+    } catch (err) {
+        console.error('[api/search] crash', err);
+        res.status(500).json({
+            error: 'SEARCH_FAILED',
+            message: err.message,
+            stack:
+                process.env.NODE_ENV === 'development'
+                    ? err.stack
+                    : undefined,
+        });
+    }
 }
+
 
 /**
  * Parsea un parámetro booleano de query string
