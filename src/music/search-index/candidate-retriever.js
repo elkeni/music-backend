@@ -81,16 +81,28 @@ export async function getCandidateSongIds(searchContext, limit = DEFAULT_CANDIDA
 
         if (debug) {
             console.log(`[meili-search] Found ${songIds.length} candidates`);
-            if (songIds.length === 0 && searchResult.hits.length === 0) {
-                // Debug extendido: Intento sin filtros si falló
+
+            if (songIds.length === 0) {
+                // Debug extendido: Verificar si el índice está realmente vacío
                 try {
                     const stats = await index.getStats();
-                    console.log(`[meili-debug] Index stats: ${stats.numberOfDocuments} docs total.`);
-                    if (queryString) {
+                    const meiliUrl = process.env.MEILI_URL
+                        ? new URL(process.env.MEILI_URL).host
+                        : 'unknown';
+
+                    console.log(`[meili-debug] Stats for "${SONGS_INDEX_NAME}" on ${meiliUrl}:`);
+                    console.log(`[meili-debug] Docs: ${stats.numberOfDocuments}`);
+                    console.log(`[meili-debug] Indexing: ${stats.isIndexing}`);
+
+                    if (stats.numberOfDocuments === 0) {
+                        console.warn('[meili-debug] ⚠️ INDEX EMPTY. Needs population via /api/admin/rebuild-index');
+                    } else if (queryString) {
                         // Check de tokenización o typo
-                        console.log(`[meili-debug] 0 results for "${queryString}". Typo tolerance is likely DISABLED.`);
+                        console.log(`[meili-debug] Index has docs but returned 0 for "${queryString}". Check typo tolerance.`);
                     }
-                } catch (e) { }
+                } catch (e) {
+                    console.warn('[meili-debug] Failed to get stats:', e.message);
+                }
             }
         }
 

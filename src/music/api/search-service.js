@@ -218,14 +218,25 @@ async function getCandidateSongs(searchContext, debug = false) {
                         return songs;
                     }
                 }
+            } else {
+                // Si devolvió 0 candidatos, chequear rápido si el índice está vacío (solo si no se chequeó en retriever)
+                // Pero el retriever ya lo hace en debug.
+                // Podríamos forzar un fallback a DB si Meili está vacío en PROD para evitar downtime total?
+                // NO, la regla 3 dice "Mantener arquitectura... NO cambiar ranking/scoring".
+                // Pero el objetivo es "Asegurar que se pueda poblar...".
+                // Mejor dejar el log explícito que añadimos en candidate-retriever.
             }
         } catch (error) {
             console.warn('[search-service] Error en candidate retrieval, usando fallback:', error.message);
         }
     }
 
-    // REPARACIÓN FASE 6: Log fuerte de degradación si falló Meili y debió estar activo
-    if (process.env.MEILI_URL && !useMeili) {
+    // REPARACIÓN FASE 6: Log fuerte si falló Meili
+    if (process.env.MEILI_URL && useMeili) {
+        // Si usamos Meili pero devolvió 0, y tenemos debug, el retriever ya logueó el estado del índice.
+        // Aquí solo validamos si necesitamos loguear degradación real (fallo de conexión) o lógica (0 results)
+        // Lo dejamos al retriever.
+    } else if (process.env.MEILI_URL && !useMeili) {
         console.error(
             `[DEGRADED MODE] ${new Date().toISOString()} | ` +
             `Query: "${searchContext.originalQuery}" | ` +

@@ -215,3 +215,46 @@ El sistema funciona **sin** PostgreSQL, Redis o Meilisearch:
 - Sin Meilisearch: usa `getAllSongs()` (O(N) scan)
 
 El output es **idéntico**, solo cambia el performance.
+
+---
+
+## 10. Producción / Vercel
+
+En entornos serverless como Vercel, los scripts de bootstrap (`node ...`) no se ejecutan automáticamente. Se debe usar el endpoint de administración.
+
+### Variables de entorno (Vercel)
+Asegúrate de configurar:
+- `DATABASE_URL`: URL de conexión a PostgreSQL (ej: Supabase)
+- `MEILI_URL`: URL de Meilisearch
+- `MEILI_MASTER_KEY`: Key maestra de Meilisearch
+- `ADMIN_TOKEN`: Token secreto para proteger endpoints administrativos (generar uno largo y seguro)
+
+### Reindexación Manual (Admin API)
+
+El endpoint `/api/admin/rebuild-index` permite poblar el índice de Meilisearch desde PostgreSQL sin downtime.
+
+#### 1. Verificar estado
+```bash
+curl "https://tu-app.vercel.app/api/admin/rebuild-index?mode=stats" \
+  -H "x-admin-token: TU_TOKEN_SECRETO"
+```
+Respuesta esperada: `{"meilisearch": {"stats": {"numberOfDocuments": 0, ...}}}` si está vacío, o el número real de documentos.
+
+#### 2. Poblar índice (Batch)
+Ejecutar esto localmente o en un script para enviar lotes de canciones.
+```bash
+# Ejemplo: Resetear e indexar primeras 500 canciones
+curl -X POST "https://tu-app.vercel.app/api/admin/rebuild-index" \
+  -H "x-admin-token: TU_TOKEN_SECRETO" \
+  -H "Content-Type: application/json" \
+  -d '{"resetIndex": true, "batchSize": 500, "offset": 0}'
+
+# Siguientes batches (incrementar offset)
+curl -X POST "https://tu-app.vercel.app/api/admin/rebuild-index" \
+  -H "x-admin-token: TU_TOKEN_SECRETO" \
+  -H "Content-Type: application/json" \
+  -d '{"batchSize": 500, "offset": 500}'
+```
+
+#### 3. Verificar búsqueda
+Una vez indexado, `/api/search` debería devolver candidatos y el debug info mostrará `candidateCount > 0`.

@@ -147,3 +147,24 @@ export function closeMeili() {
     meiliEnabled = false;
     console.log('[meili] Meilisearch desconectado');
 }
+
+/**
+ * Obtiene estadísticas del índice
+ * 
+ * @returns {Promise<{numberOfDocuments: number, isIndexing: boolean} | null>}
+ */
+export async function getIndexStats() {
+    if (!client) return null;
+
+    const index = client.index(SONGS_INDEX_NAME);
+    try {
+        const stats = await index.getStats();
+        return {
+            numberOfDocuments: stats.numberOfDocuments,
+            isIndexing: stats.isIndexing
+        };
+    } catch (error) {
+        console.error(`[meili] Error obteniendo stats de "${SONGS_INDEX_NAME}":`, error.message);
+        return null;
+    }
+}
