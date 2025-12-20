@@ -500,3 +500,46 @@ function rowToIdentity(row) {
         identityKey: row.identity_key
     };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONVENIENCE: persistSong (all-in-one)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Persiste una canción completa con su identidad y autoridad
+ * Útil para el CLI y carga bulk
+ * 
+ * @param {{ 
+ *   song: import('../song-model.js').Song, 
+ *   identity?: import('../identity/build-identity.js').SongIdentity,
+ *   authority?: import('../authority/source-authority.js').SourceAuthority,
+ *   nonOfficial?: { isNonOfficial: boolean, reason?: string }
+ * }} data
+ * @returns {Promise<boolean>}
+ */
+export async function persistSong({ song, identity, authority, nonOfficial }) {
+    if (!song || !song.id) {
+        console.warn('[song-repository] persistSong: song without ID, skipping');
+        return false;
+    }
+
+    try {
+        // 1. Persistir song
+        await upsertSong(song);
+
+        // 2. Persistir identity si existe
+        if (identity) {
+            await upsertSongIdentity(song.id, identity);
+        }
+
+        // 3. Persistir authority si existe
+        if (authority) {
+            await upsertSongAuthority(song.id, authority, nonOfficial || { isNonOfficial: false });
+        }
+
+        return true;
+    } catch (error) {
+        console.error(`[song-repository] Error persisting song ${song.id}:`, error.message);
+        return false;
+    }
+}

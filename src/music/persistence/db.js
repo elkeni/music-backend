@@ -59,7 +59,8 @@ function getConfig() {
     if (process.env.DATABASE_URL) {
         return {
             connectionString: process.env.DATABASE_URL,
-            ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+            // Supabase y la mayoría de DBs en la nube requieren SSL
+            ssl: { rejectUnauthorized: false },
             ...DEFAULT_CONFIG
         };
     }

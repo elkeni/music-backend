@@ -21,6 +21,10 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
+// Cargar variables de entorno ANTES de cualquier otro import
+// dotenv es un paquete npm que lee el archivo .env
+import 'dotenv/config';
+
 import { createSong, SOURCE_TYPES } from './song-model.js';
 import { addSong, addSongs, getSongCount } from './song-store.js';
 
@@ -438,4 +442,134 @@ export function loadFromDeezer(deezerTrack) {
         return song;
     }
     return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CLI ENTRYPOINT (solo para uso manual)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if (process.argv[1] && process.argv[1].includes('song-loader.js')) {
+    const query = process.argv.slice(2).join(' ');
+
+    if (!query) {
+        console.error('❌ Uso: node song-loader.js <search query>');
+        console.error('   Ejemplo: node song-loader.js thunderstruck');
+        process.exit(1);
+    }
+
+    (async () => {
+        // Cargar variables de entorno desde .env
+        await import('dotenv/config');
+
+        console.log(`🎵 Loading songs for query: "${query}"`);
+
+        // Import dinámico de módulos necesarios
+        const { initDB, isDBEnabled } = await import('./persistence/db.js');
+        const { persistSong } = await import('./persistence/song-repository.js');
+        const { buildSongIdentity } = await import('./identity/build-identity.js');
+        const { evaluateSourceAuthority } = await import('./authority/source-authority.js');
+        const { evaluateNonOfficial } = await import('./authority/detect-non-official.js');
+
+        // Inicializar DB - modo dry-run si no está disponible
+        const dbConnected = await initDB();
+        const dryRun = !dbConnected;
+
+        if (dryRun) {
+            console.log('⚠️  PostgreSQL no disponible - modo DRY RUN (no se persiste nada)');
+            console.log('   Para persistir, configura DATABASE_URL en variables de entorno');
+        } else {
+            console.log('✅ Conectado a PostgreSQL');
+        }
+
+        // Buscar en YouTube usando fetch a la API local o youtube-sr
+        let results = [];
+
+        try {
+            // youtube-sr es CommonJS, usar createRequire para importarlo
+            const { createRequire } = await import('module');
+            const require = createRequire(import.meta.url);
+            const YouTube = require('youtube-sr').default || require('youtube-sr');
+            const searchResults = await YouTube.search(query, { limit: 20, type: 'video' });
+
+            console.log(`🔍 Found ${searchResults.length} YouTube results`);
+
+            // Transformar resultados
+            for (const item of searchResults) {
+                const ytItem = {
+                    videoId: item.id,
+                    name: item.title,
+                    duration: item.duration / 1000, // youtube-sr da ms
+                    channelId: item.channel?.id,
+                    channelTitle: item.channel?.name,
+                    thumbnails: item.thumbnail?.url
+                };
+
+                const song = transformYouTubeItem(ytItem);
+                if (song) {
+                    // Calcular identity
+                    const identity = buildSongIdentity(song);
+
+                    // Calcular authority
+                    const authority = evaluateSourceAuthority(song);
+                    const nonOfficial = evaluateNonOfficial(song);
+
+                    results.push({
+                        song,
+                        identity,
+                        authority,
+                        nonOfficial,
+                        confidence: authority.score / 100 // normalizar a 0-1
+                    });
+                }
+            }
+        } catch (e) {
+            console.error('❌ Error buscando en YouTube:', e.message);
+            console.error('   ¿Está instalado youtube-sr? npm install youtube-sr');
+            process.exit(1);
+        }
+
+        console.log(`🔍 Processed ${results.length} candidates`);
+
+        // Filtrar por alta confianza
+        const MIN_CONFIDENCE = 0.70; // authority score >= 70
+        const highConfidence = results.filter(r => r.confidence >= MIN_CONFIDENCE);
+
+        console.log(`📊 High confidence (>= 70%): ${highConfidence.length} candidates`);
+
+        // Mostrar candidatos
+        for (const item of highConfidence) {
+            console.log(`  • ${item.song.title} - ${item.song.artistNames.join(', ')} (${(item.confidence * 100).toFixed(0)}%)`);
+        }
+
+        // Persistir solo si hay DB
+        let persisted = 0;
+
+        if (!dryRun) {
+            for (const item of highConfidence) {
+                const success = await persistSong({
+                    song: item.song,
+                    identity: item.identity,
+                    authority: item.authority,
+                    nonOfficial: item.nonOfficial
+                });
+
+                if (success) {
+                    persisted++;
+                }
+            }
+
+            console.log(`✅ Persisted ${persisted} songs into database`);
+
+            // Cerrar conexión
+            const { closeDB } = await import('./persistence/db.js');
+            await closeDB();
+        } else {
+            console.log(`⚠️  DRY RUN: ${highConfidence.length} songs would be persisted`);
+        }
+
+        process.exit(0);
+    })().catch(err => {
+        console.error('💥 Loader failed:', err);
+        process.exit(1);
+    });
 }

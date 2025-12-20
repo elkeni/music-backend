@@ -19,6 +19,8 @@
 // FASE 1: MODELO (song-model.js)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+import 'dotenv/config';
+
 export {
     createSong,
     validateSong,
@@ -264,7 +266,9 @@ export {
     getCanonicalSelectionByKey,
     // FASE 6 HARDENING
     getAllCanonicalSelectionsPaged,
-    countCanonicalSelections
+    countCanonicalSelections,
+    // CLI helper
+    persistSong
 } from './persistence/song-repository.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
