@@ -40,6 +40,33 @@ export default async function handler(req, res) {
 
     try {
         // -----------------------------------------------------------------------
+        // MACRO: DEBUG SEARCH MODE (Direct Meili Access)
+        // -----------------------------------------------------------------------
+        if (mode === 'debug-search') {
+            const q = req.query.q || '';
+            const meiliClient = await import('../../src/music/search-index/meili-client.js');
+            const index = meiliClient.getSongsIndex();
+
+            if (!index) {
+                return res.status(500).json({ error: 'Index not initialized' });
+            }
+
+            // Búsqueda cruda sin filtros de app
+            const searchResult = await index.search(q, {
+                limit: 10,
+                attributesToRetrieve: ['*'], // Ver TODO
+                showRankingScore: true
+            });
+
+            return res.status(200).json({
+                query: q,
+                hits: searchResult.hits,
+                estimatedTotalHits: searchResult.estimatedTotalHits,
+                processingTimeMs: searchResult.processingTimeMs
+            });
+        }
+
+        // -----------------------------------------------------------------------
         // MACRO: STATS MODE
         // -----------------------------------------------------------------------
         // Solo entrar si es GET explícito o si mode=stats se pidió explícitamente
