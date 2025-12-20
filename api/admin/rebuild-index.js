@@ -13,7 +13,7 @@ export default async function handler(req, res) {
     const adminToken = process.env.ADMIN_TOKEN;
     const requestToken = req.headers['x-admin-token'];
 
-    if (!adminToken || (requestToken !== adminToken && requestToken !== 'lol1423')) { // Admitir token debug temporal si lo deseas, o borrar
+    if (!adminToken || requestToken !== adminToken) {
         if (!process.env.ADMIN_TOKEN) {
             return res.status(500).json({ error: 'Config Error', message: 'ADMIN_TOKEN env var not set on server' });
         }
