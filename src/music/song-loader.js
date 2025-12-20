@@ -143,60 +143,62 @@ function detectValidVersion(title) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TRANSFORMADORES: YouTube → Song (FASE 1 PURA)
+// IMPORTS DEL EXTRACTOR COMPARTIDO (FASE 3 - UNIFICADA)
+// ═══════════════════════════════════════════════════════════════════════════════
+import {
+    extractArtistName,
+    detectValidVersion,
+    detectForbiddenVersion,
+    isTrashContent
+} from './extraction/youtube-extractor.js';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRANSFORMADORES: YouTube → Song (MODERNIZADO)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Transforma un resultado de YouTube en un Song
- * FASE 1 PURA: Sin inferencias, sin heurísticas
+ * REFACTORIZADO: Usa lógica compartida con el buscador.
  * 
  * @param {Object} ytItem - Resultado crudo de youtube-search
  * @returns {import('./song-model.js').Song | null} Song o null si es inválido
  */
 export function transformYouTubeItem(ytItem) {
     try {
-        // ═══════════════════════════════════════════════════════════════════════
-        // VALIDACIÓN: ID OBLIGATORIO (100% determinístico)
-        // ═══════════════════════════════════════════════════════════════════════
+        // 1. Validar ID
         const id = ytItem.videoId || ytItem.id;
+        if (!id) return null;
 
-        if (!id) {
-            console.log(`[song-loader] YouTube: Descartando canción sin ID`);
-            return null;
-        }
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // VALIDACIÓN: Duración obligatoria
-        // ═══════════════════════════════════════════════════════════════════════
+        // 2. Validar Duración
         const duration = ytItem.duration || ytItem.lengthSeconds || 0;
+        if (!duration || duration <= 0) return null;
 
-        if (!duration || duration <= 0) {
-            console.log(`[song-loader] YouTube: Ignorando "${ytItem.name}" - sin duración válida`);
+        // 3. Extracción de Datos Básicos
+        const title = ytItem.name || ytItem.title || 'Unknown';
+        const artist = extractArtistName(ytItem) || 'Unknown';
+
+        // 4. Filtrado de Calidad (Basura / Versiones Prohibidas)
+        // Solo para importación masiva. Si el usuario pide explícitamente, tal vez queramos ser laxos.
+        // Pero para "rebuild-index" queremos calidad.
+        if (isTrashContent({ name: title, artist, duration })) {
+            console.log(`[song-loader] Ignored trash content: "${title}"`);
             return null;
         }
 
-        // ═══════════════════════════════════════════════════════════════════════
-        // EXTRAER ARTISTAS - FASE 1 PURA: Array plano, sin groupName
-        // ═══════════════════════════════════════════════════════════════════════
-        const rawArtist = extractArtistName(ytItem);
-        // FASE 1: Solo un array con el artista tal cual viene
-        const artistNames = rawArtist ? [rawArtist] : ['Unknown'];
+        const forbidden = detectForbiddenVersion(title);
+        if (forbidden) {
+            console.log(`[song-loader] Ignored forbidden version (${forbidden}): "${title}"`);
+            return null;
+        }
 
-        // ═══════════════════════════════════════════════════════════════════════
-        // DETECTAR VERSIÓN
-        // ═══════════════════════════════════════════════════════════════════════
-        const version = detectValidVersion(ytItem.name || '');
+        // 5. Detectar versión válida
+        const version = detectValidVersion(title);
 
-        // ═══════════════════════════════════════════════════════════════════════
-        // CREAR SONG - FASE 1 PURA
-        // ═══════════════════════════════════════════════════════════════════════
+        // 6. Crear Song
         return createSong({
             id: id,
-            title: ytItem.name || ytItem.title || 'Unknown',  // SIN normalizar
-            artistNames: artistNames,
-            // groupName: undefined - NO decidir bandas en FASE 1
-            // album: undefined - YouTube NO provee album
-            // releaseDate: undefined - YouTube NO provee fecha
+            title: title,
+            artistNames: [artist], // Array simple por ahora
             duration: duration,
             versionType: version.type,
             versionDetails: version.details || undefined,
@@ -207,7 +209,6 @@ export function transformYouTubeItem(ytItem) {
                 channelTitle: ytItem.channelTitle || ytItem.subtitle,
                 thumbnails: ytItem.thumbnails || ytItem.thumbnail,
                 description: ytItem.description,
-                viewCount: ytItem.viewCount,
                 publishedAt: ytItem.publishedAt
             }
         });
