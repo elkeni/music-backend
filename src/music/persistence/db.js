@@ -50,6 +50,12 @@ let pool = null;
 let dbEnabled = false;
 
 /**
+ * Error de inicialización
+ * @type {Error | null}
+ */
+let initError = null;
+
+/**
  * Obtiene la configuración de la base de datos
  * 
  * @returns {DBConfig}
@@ -78,6 +84,13 @@ function getConfig() {
 }
 
 /**
+ * Obtiene el error de inicialización si hubo
+ */
+export function getInitError() {
+    return initError;
+}
+
+/**
  * Inicializa el pool de conexiones
  * 
  * @returns {Promise<boolean>} - True si se conectó exitosamente
@@ -97,12 +110,14 @@ export async function initDB() {
         client.release();
 
         dbEnabled = true;
+        initError = null;
         console.log('[db] PostgreSQL conectado exitosamente');
         return true;
     } catch (error) {
         console.warn('[db] PostgreSQL no disponible, usando modo in-memory:', error.message);
         pool = null;
         dbEnabled = false;
+        initError = error;
         return false;
     }
 }
