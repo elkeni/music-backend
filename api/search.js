@@ -19,34 +19,6 @@ export const config = {
     runtime: 'nodejs',
 };
 
-export default async function handler(req, res) {
-    try {
-        const { q, debug } = req.query;
-
-        // 👇 IMPORT DINÁMICO (CRÍTICO)
-        const { searchSongs } = await import(
-            '../src/music/api/search-service.js'
-        );
-
-        const result = await searchSongs(q, {
-            debug: debug === 'true',
-        });
-
-        res.status(200).json(result);
-    } catch (err) {
-        console.error('[api/search] crash', err);
-        res.status(500).json({
-            error: 'SEARCH_FAILED',
-            message: err.message,
-            stack:
-                process.env.NODE_ENV === 'development'
-                    ? err.stack
-                    : undefined,
-        });
-    }
-}
-
-
 /**
  * Parsea un parámetro booleano de query string
  * 
@@ -98,6 +70,9 @@ export default async function handler(req, res) {
         const grouped = parseBoolean(req.query.grouped, true);
         const debug = parseBoolean(req.query.debug, false);
 
+        // 👇 IMPORT DINÁMICO (CRÍTICO para evitar crash en Vercel si DB no conecta al inicio)
+        const { searchSongs, validateQuery } = await import('../src/music/api/search-service.js');
+
         // Validar query
         const validation = validateQuery(query);
         if (!validation.valid) {
@@ -107,7 +82,7 @@ export default async function handler(req, res) {
             });
         }
 
-        // Ejecutar búsqueda (async en FASE 6)
+        // Ejecutar búsqueda
         const result = await searchSongs(query, {
             limit,
             offset,
@@ -133,11 +108,12 @@ export default async function handler(req, res) {
         return res.status(200).json(result);
 
     } catch (error) {
-        console.error('[search-api] Error:', error);
+        console.error('[search-api] crash:', error);
 
         return res.status(500).json({
-            error: 'Internal server error',
-            message: process.env.NODE_ENV === 'development' ? error.message : undefined
+            error: 'SEARCH_FAILED',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Internal Server Error',
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 }
