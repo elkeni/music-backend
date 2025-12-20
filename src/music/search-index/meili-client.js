@@ -98,10 +98,14 @@ async function ensureIndexExists() {
                 'identityKey'
             ],
             sortableAttributes: [],
-            // REPARACIÓN FASE 6: typoTolerance desactivado
-            // Exactitud > conveniencia
+            // REPARACIÓN FASE 6: typoTolerance activado (default)
+            // Permitir flexibilidad mínima para errores de dedo
             typoTolerance: {
-                enabled: false
+                enabled: true,
+                minWordSizeForTypos: {
+                    oneTypo: 5,
+                    twoTypos: 9
+                }
             }
         });
 
