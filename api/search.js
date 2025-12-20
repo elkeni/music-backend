@@ -51,7 +51,7 @@ function parseNumber(value, defaultValue) {
  * @param {Object} req - Request object
  * @param {Object} res - Response object
  */
-export default function handler(req, res) {
+export default async function handler(req, res) {
     // Solo permitir GET
     if (req.method !== 'GET') {
         return res.status(405).json({
@@ -77,15 +77,15 @@ export default function handler(req, res) {
             });
         }
 
-        // Ejecutar búsqueda
-        const result = searchSongs(query, {
+        // Ejecutar búsqueda (async en FASE 6)
+        const result = await searchSongs(query, {
             limit,
             offset,
             grouped,
             debug
         });
 
-        // Si hubo error interno, devolver 500
+        // Si hubo error interno, devolver 400
         if (result.error) {
             return res.status(400).json(result);
         }
