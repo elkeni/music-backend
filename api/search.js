@@ -53,7 +53,7 @@ function parseNumber(value, defaultValue) {
  * @param {Object} req - Request object
  * @param {Object} res - Response object
  */
-export default async function handler(req, res) {
+export default async function searchHandler(req, res) {
     // Solo permitir GET
     if (req.method !== 'GET') {
         return res.status(405).json({
@@ -122,5 +122,5 @@ export default async function handler(req, res) {
  * Para uso con Express (alternativo a serverless)
  */
 export function expressHandler(req, res) {
-    return handler(req, res);
+    return searchHandler(req, res);
 }

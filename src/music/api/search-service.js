@@ -64,7 +64,7 @@ async function loadModules() {
     try {
         [_redisCacheModule, _candidateRetrieverModule, _songRepositoryModule] = await Promise.all([
             import('../cache/redis-cache.js').catch(() => null),
-            import('../search-index/candidate-retriever.js').catch(() => null),
+            import('../search-index/candidate-retriever.js'),
             import('../persistence/song-repository.js').catch(() => null)
         ]);
         _modulesLoaded = true;

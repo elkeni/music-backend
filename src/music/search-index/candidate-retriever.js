@@ -142,5 +142,13 @@ export async function searchCandidatesByQuery(query, limit = DEFAULT_CANDIDATE_L
  * @returns {boolean}
  */
 export function isCandidateRetrieverAvailable() {
-    return isMeiliEnabled() && getSongsIndex() !== null;
+    console.log('[meili-check]', {
+        url: !!process.env.MEILI_URL,
+        key: !!process.env.MEILI_MASTER_KEY
+    });
+
+    return Boolean(
+        process.env.MEILI_URL &&
+        process.env.MEILI_MASTER_KEY
+    );
 }
