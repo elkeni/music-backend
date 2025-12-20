@@ -27,13 +27,33 @@ const DEFAULT_CANDIDATE_LIMIT = 200;
  * @param {number} [limit=200] - Máximo de candidatos
  * @returns {Promise<string[]>} - Array de songIds
  */
+/**
+ * Obtiene IDs de canciones candidatas usando Meilisearch
+ * 
+ * @param {import('../ranking/search-context.js').SearchContext} searchContext
+ * @param {number} [limit=200] - Máximo de candidatos
+ * @returns {Promise<string[]>} - Array de songIds
+ */
 export async function getCandidateSongIds(searchContext, limit = DEFAULT_CANDIDATE_LIMIT) {
-    if (!isMeiliEnabled()) {
-        // Fallback: retornar array vacío, el caller usará getAllSongs
+    // 👇 INIT LAZY: Asegurar inicialización aquí
+    let meiliClient;
+    try {
+        meiliClient = await import('./meili-client.js');
+        // Si no está inicializado, intentar iniciarlo ahora
+        if (!meiliClient.isMeiliEnabled()) {
+            await meiliClient.initMeili();
+        }
+    } catch (e) {
+        console.warn('[candidate-retriever] Error importing meili-client', e);
         return [];
     }
 
-    const index = getSongsIndex();
+    if (!meiliClient.isMeiliEnabled()) {
+        console.warn('[candidate-retriever] Meili still disabled after init attempt');
+        return [];
+    }
+
+    const index = meiliClient.getSongsIndex();
     if (!index) {
         return [];
     }
