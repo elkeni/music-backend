@@ -8,7 +8,7 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-import { getSongsIndex, isMeiliEnabled, getClient } from './meili-client.js';
+import { getSongsIndex, isMeiliEnabled, getClient, SONGS_INDEX_NAME } from './meili-client.js';
 
 /**
  * @typedef {Object} SongDocument
@@ -32,17 +32,20 @@ import { getSongsIndex, isMeiliEnabled, getClient } from './meili-client.js';
  * @returns {SongDocument}
  */
 export function buildSongDocument(song, identity) {
+    // ⚠️ ASEGURAR QUE LOS CAMPOS COINCIDEN CON FILTERABLE ATTRIBUTES EN MEILI-CLIENT
+    // filterableAttributes: ['versionType', 'durationBucket', 'source', 'identityKey']
+
     return {
-        songId: song.id,
+        songId: song.id, // Primary Key
         titleClean: identity.titleClean,
         titleNormalized: identity.titleNormalized,
         artistNormalized: identity.artistNormalized || [],
         album: song.album || null,
         releaseDate: song.releaseDate || null,
-        durationBucket: identity.durationBucket,
-        versionType: song.versionType || 'original',
-        identityKey: identity.identityKey,
-        source: song.source
+        durationBucket: identity.durationBucket, // Filterable
+        versionType: song.versionType || 'original', // Filterable
+        identityKey: identity.identityKey, // Filterable
+        source: song.source // Filterable
     };
 }
 
@@ -66,7 +69,7 @@ export async function indexSong(song, identity) {
         await index.addDocuments([document]);
         return true;
     } catch (error) {
-        console.error('[indexer] Error indexando canción:', error.message);
+        console.error(`[indexer] Error indexando canción en índice "${SONGS_INDEX_NAME}":`, error.message);
         return false;
     }
 }
@@ -104,10 +107,10 @@ export async function indexSongsBatch(items) {
             console.warn('[indexer] No se puede esperar por la tarea (waitForTask faltante), asumiendo éxito optimista.');
         }
 
-        console.log(`[indexer] ${documents.length} canciones indexadas`);
+        console.log(`[indexer] ${documents.length} canciones indexadas en "${SONGS_INDEX_NAME}"`);
         return { indexed: documents.length, failed: 0 };
     } catch (error) {
-        console.error('[indexer] Error en batch:', error.message);
+        console.error(`[indexer] Error en batch sobre "${SONGS_INDEX_NAME}":`, error.message);
         return { indexed: 0, failed: items.length };
     }
 }
@@ -128,7 +131,7 @@ export async function deleteSongFromIndex(songId) {
         await index.deleteDocument(songId);
         return true;
     } catch (error) {
-        console.error('[indexer] Error eliminando documento:', error.message);
+        console.error(`[indexer] Error eliminando documento de "${SONGS_INDEX_NAME}":`, error.message);
         return false;
     }
 }
@@ -147,10 +150,10 @@ export async function clearIndex() {
     try {
         const task = await index.deleteAllDocuments();
         await index.waitForTask(task.taskUid, { timeOutMs: 60000 });
-        console.log('[indexer] Índice limpiado');
+        console.log(`[indexer] Índice "${SONGS_INDEX_NAME}" limpiado`);
         return true;
     } catch (error) {
-        console.error('[indexer] Error limpiando índice:', error.message);
+        console.error(`[indexer] Error limpiando índice "${SONGS_INDEX_NAME}":`, error.message);
         return false;
     }
 }
@@ -173,7 +176,7 @@ export async function getIndexStats() {
             isIndexing: stats.isIndexing
         };
     } catch (error) {
-        console.error('[indexer] Error obteniendo stats:', error.message);
+        console.error(`[indexer] Error obteniendo stats de "${SONGS_INDEX_NAME}":`, error.message);
         return null;
     }
 }
