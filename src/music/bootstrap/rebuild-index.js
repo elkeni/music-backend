@@ -1,3 +1,16 @@
+import 'dotenv/config';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+import { initDB, closeDB, isDBEnabled } from '../persistence/db.js';
+import {
+    getAllSongsPaged,
+    getSongIdentity,
+    countSongs
+} from '../persistence/song-repository.js';
+import { initMeili, closeMeili, isMeiliEnabled } from '../search-index/meili-client.js';
+import { clearIndex, indexSongsBatch, getIndexStats } from '../search-index/indexer.js';
+
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
  * 📇 REBUILD INDEX - FASE 6: REINDEXACIÓN EN MEILISEARCH
@@ -10,15 +23,6 @@
  * 
  * ═══════════════════════════════════════════════════════════════════════════════
  */
-
-import { initDB, closeDB, isDBEnabled } from '../persistence/db.js';
-import {
-    getAllSongsPaged,
-    getSongIdentity,
-    countSongs
-} from '../persistence/song-repository.js';
-import { initMeili, closeMeili, isMeiliEnabled } from '../search-index/meili-client.js';
-import { clearIndex, indexSongsBatch, getIndexStats } from '../search-index/indexer.js';
 
 /**
  * Tamaño de batch para indexación
@@ -155,27 +159,48 @@ export async function verifyIndex() {
 // CLI ENTRY POINT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const isMainModule = import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
+const __filename = fileURLToPath(import.meta.url);
+const entryFile = process.argv[1];
+
+// Robust main module check
+const isMainModule = path.resolve(__filename) === path.resolve(entryFile);
 
 if (isMainModule) {
-    console.log('═══════════════════════════════════════════════════════════════════════');
-    console.log('📇 REBUILD MEILISEARCH INDEX');
-    console.log('═══════════════════════════════════════════════════════════════════════');
+    (async () => {
+        console.log('═══════════════════════════════════════════════════════════════════════');
+        console.log('📇 REBUILD MEILISEARCH INDEX');
+        console.log('═══════════════════════════════════════════════════════════════════════');
+        console.log('[bootstrap] rebuild-index starting');
 
-    try {
-        await initDB();
-        await initMeili();
+        // Validation of environment variables
+        const meiliUrl = process.env.MEILI_URL;
+        const meiliKey = process.env.MEILI_MASTER_KEY;
+        const dbUrl = process.env.DATABASE_URL;
 
-        await rebuildMeiliIndex();
-        await verifyIndex();
+        console.log(`[bootstrap] MEILI_URL = ${meiliUrl || 'Not Set'}`);
+        console.log(`[bootstrap] MEILI_MASTER_KEY = ${!!meiliKey}`);
+        console.log(`[bootstrap] DATABASE_URL = ${!!dbUrl}`);
 
-        closeMeili();
-        await closeDB();
+        if (!meiliUrl) {
+            console.error('❌ Error: MEILI_URL is required in .env');
+            process.exit(1);
+        }
 
-        console.log('\n✅ Reindexación completada exitosamente');
-        process.exit(0);
-    } catch (error) {
-        console.error('\n❌ Error durante reindexación:', error.message);
-        process.exit(1);
-    }
+        try {
+            await initDB();
+            await initMeili();
+
+            await rebuildMeiliIndex();
+            await verifyIndex();
+
+            closeMeili();
+            await closeDB();
+
+            console.log('\n✅ Reindexación completada exitosamente');
+            process.exit(0);
+        } catch (error) {
+            console.error('\n❌ Error durante reindexación:', error);
+            process.exit(1);
+        }
+    })();
 }

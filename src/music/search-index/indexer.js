@@ -8,7 +8,7 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-import { getSongsIndex, isMeiliEnabled } from './meili-client.js';
+import { getSongsIndex, isMeiliEnabled, getClient } from './meili-client.js';
 
 /**
  * @typedef {Object} SongDocument
@@ -92,9 +92,17 @@ export async function indexSongsBatch(items) {
 
         // Meilisearch maneja batches internamente
         const task = await index.addDocuments(documents);
+        const taskUid = task.taskUid || task.uid;
 
-        // Esperar a que termine
-        await index.waitForTask(task.taskUid, { timeOutMs: 30000 });
+        // REPARACIÓN: Usar client.waitForTask si disponible para mayor compatibilidad
+        const client = getClient();
+        if (client && typeof client.waitForTask === 'function') {
+            await client.waitForTask(taskUid, { timeOutMs: 30000 });
+        } else if (typeof index.waitForTask === 'function') {
+            await index.waitForTask(taskUid, { timeOutMs: 30000 });
+        } else {
+            console.warn('[indexer] No se puede esperar por la tarea (waitForTask faltante), asumiendo éxito optimista.');
+        }
 
         console.log(`[indexer] ${documents.length} canciones indexadas`);
         return { indexed: documents.length, failed: 0 };
