@@ -36,13 +36,14 @@ export default async function handler(req, res) {
         });
     }
 
-    const { mode = 'stats' } = req.query;
+    const { mode } = req.query;
 
     try {
         // -----------------------------------------------------------------------
         // MACRO: STATS MODE
         // -----------------------------------------------------------------------
-        if (mode === 'stats') {
+        // Solo entrar si es GET explícito o si mode=stats se pidió explícitamente
+        if (mode === 'stats' || (req.method === 'GET' && !mode)) {
             const meiliStats = await getIndexStats();
             const dbCount = await countSongs();
 
