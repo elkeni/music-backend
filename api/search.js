@@ -15,6 +15,10 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
+export const config = {
+    runtime: 'nodejs'
+};
+
 import { searchSongs, validateQuery } from '../src/music/api/search-service.js';
 
 /**
