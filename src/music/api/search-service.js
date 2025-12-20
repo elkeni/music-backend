@@ -45,22 +45,32 @@ import {
     getCacheStats
 } from '../cache/search-cache.js';
 
-// Cache Redis (FASE 6) - import dinámico para evitar errores si no está instalado
-let redisCache = null;
-try {
-    redisCache = await import('../cache/redis-cache.js');
-} catch (e) {
-    console.log('[search-service] Redis cache no disponible, usando solo in-memory');
-}
+// ═══════════════════════════════════════════════════════════════════════════════
+// LAZY INIT SINGLETONS (Runtime selection)
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// Candidate retrieval (FASE 6) - import dinámico
-let candidateRetriever = null;
-let songRepository = null;
-try {
-    candidateRetriever = await import('../search-index/candidate-retriever.js');
-    songRepository = await import('../persistence/song-repository.js');
-} catch (e) {
-    console.log('[search-service] Meilisearch/DB no disponible, usando fallback in-memory');
+let _redisCacheModule = null;
+let _candidateRetrieverModule = null;
+let _songRepositoryModule = null;
+let _modulesLoaded = false;
+
+/*
+ * Carga lazy de módulos pesados/externos (Redis, Meili, DB)
+ * Se ejecuta solo cuando se necesita, asegurando que process.env esté listo
+ */
+async function loadModules() {
+    if (_modulesLoaded) return;
+
+    try {
+        [_redisCacheModule, _candidateRetrieverModule, _songRepositoryModule] = await Promise.all([
+            import('../cache/redis-cache.js').catch(() => null),
+            import('../search-index/candidate-retriever.js').catch(() => null),
+            import('../persistence/song-repository.js').catch(() => null)
+        ]);
+        _modulesLoaded = true;
+    } catch (e) {
+        console.error('[search-service] Error loading runtime modules:', e);
+    }
 }
 
 /**
@@ -155,8 +165,8 @@ function normalizeOptions(options = {}) {
  */
 async function getCached(cacheKey) {
     // Intentar Redis primero
-    if (redisCache && redisCache.isRedisEnabled()) {
-        const redisResult = await redisCache.redisGet(cacheKey);
+    if (_redisCacheModule && _redisCacheModule.isRedisEnabled()) {
+        const redisResult = await _redisCacheModule.redisGet(cacheKey);
         if (redisResult) {
             return redisResult;
         }
@@ -174,8 +184,8 @@ async function getCached(cacheKey) {
  */
 async function setCached(cacheKey, value) {
     // Guardar en Redis si disponible
-    if (redisCache && redisCache.isRedisEnabled()) {
-        await redisCache.redisSet(cacheKey, value, 30);
+    if (_redisCacheModule && _redisCacheModule.isRedisEnabled()) {
+        await _redisCacheModule.redisSet(cacheKey, value, 30);
     }
 
     // Siempre guardar en in-memory como backup
@@ -184,20 +194,25 @@ async function setCached(cacheKey, value) {
 
 /**
  * Obtiene canciones candidatas (Meilisearch → fallback getAllSongs)
+ * Lógica movida a runtime para asegurar que lee process.env actualizado
  * 
  * @param {import('../ranking/search-context.js').SearchContext} searchContext
  * @returns {Promise<import('../song-model.js').Song[]>}
  */
 async function getCandidateSongs(searchContext) {
+    // 1. Selector de estrategia en runtime
+    // Solo si el módulo cargó Y está disponible (el retriever hace su check interno de process.env)
+    const useMeili = _candidateRetrieverModule && _candidateRetrieverModule.isCandidateRetrieverAvailable();
+
     // Intentar usar Meilisearch para candidatos
-    if (candidateRetriever && candidateRetriever.isCandidateRetrieverAvailable()) {
+    if (useMeili) {
         try {
-            const candidateIds = await candidateRetriever.getCandidateSongIds(searchContext, CANDIDATE_LIMIT);
+            const candidateIds = await _candidateRetrieverModule.getCandidateSongIds(searchContext, CANDIDATE_LIMIT);
 
             if (candidateIds && candidateIds.length > 0) {
-                // Obtener canciones por IDs
-                if (songRepository) {
-                    const songs = await songRepository.getSongsByIds(candidateIds);
+                // Obtener canciones por IDs desde DB o fallback
+                if (_songRepositoryModule) {
+                    const songs = await _songRepositoryModule.getSongsByIds(candidateIds);
                     if (songs && songs.length > 0) {
                         return songs;
                     }
@@ -208,14 +223,15 @@ async function getCandidateSongs(searchContext) {
         }
     }
 
-    // REPARACIÓN FASE 6: Log fuerte de degradación
-    // Esto indica que el sistema está en modo O(N) - no escalable
-    console.error(
-        `[DEGRADED MODE] ${new Date().toISOString()} | ` +
-        `Query: "${searchContext.originalQuery}" | ` +
-        `Usando getAllSongs() - O(N) scan. ` +
-        `Meilisearch/DB no disponible.`
-    );
+    // REPARACIÓN FASE 6: Log fuerte de degradación si falló Meili y debió estar activo
+    if (process.env.MEILI_URL && !useMeili) {
+        console.error(
+            `[DEGRADED MODE] ${new Date().toISOString()} | ` +
+            `Query: "${searchContext.originalQuery}" | ` +
+            `Usando getAllSongs() - O(N) scan. ` +
+            `Meilisearch estaba configurado pero no disponible.`
+        );
+    }
 
     // Fallback: obtener todas las canciones del store en memoria
     return getAllSongs();
@@ -323,6 +339,9 @@ function flattenResults(rankedResults, includeDebug = false) {
 export async function searchSongs(query, options = {}) {
     const startTime = Date.now();
 
+    // 0. Carga de módulos en runtime (CRÍTICO para serverless)
+    await loadModules();
+
     // ═══════════════════════════════════════════════════════════════════════════
     // VALIDACIÓN
     // ═══════════════════════════════════════════════════════════════════════════
@@ -359,7 +378,7 @@ export async function searchSongs(query, options = {}) {
                 meta: {
                     ...cachedResult.meta,
                     cached: true,
-                    cacheSource: redisCache?.isRedisEnabled() ? 'redis' : 'memory',
+                    cacheSource: _redisCacheModule?.isRedisEnabled() ? 'redis' : 'memory',
                     executionTimeMs: Date.now() - startTime
                 }
             };
@@ -378,6 +397,11 @@ export async function searchSongs(query, options = {}) {
 
     // 3. Rank results (SIN CAMBIOS - usa mismo ranking de FASE 4)
     const rankedResults = rankResults(candidateSongs, searchContext);
+
+    // Determines source for metadata
+    const sourceName = (_candidateRetrieverModule && _candidateRetrieverModule.isCandidateRetrieverAvailable())
+        ? 'meilisearch'
+        : 'memory';
 
     // 4. Build response based on grouped option
     let response;
@@ -400,7 +424,7 @@ export async function searchSongs(query, options = {}) {
             meta: {
                 cached: false,
                 executionTimeMs: 0,
-                candidateSource: candidateRetriever?.isCandidateRetrieverAvailable() ? 'meilisearch' : 'memory',
+                candidateSource: sourceName,
                 pagination: {
                     limit: normalizedOptions.limit,
                     offset: normalizedOptions.offset,
@@ -425,7 +449,7 @@ export async function searchSongs(query, options = {}) {
             meta: {
                 cached: false,
                 executionTimeMs: 0,
-                candidateSource: candidateRetriever?.isCandidateRetrieverAvailable() ? 'meilisearch' : 'memory',
+                candidateSource: sourceName,
                 pagination: {
                     limit: normalizedOptions.limit,
                     offset: normalizedOptions.offset,
@@ -455,7 +479,7 @@ export async function searchSongs(query, options = {}) {
             tokens: searchContext.tokens,
             candidateCount: candidateSongs.length,
             cacheStats: getCacheStats(),
-            redisStats: redisCache?.redisStats() || null
+            redisStats: _redisCacheModule?.redisStats() || { enabled: false, hits: 0, misses: 0, errors: 0, hitRate: '0%' }
         };
     }
 
