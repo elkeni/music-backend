@@ -9,5 +9,10 @@
   "scripts": {
     "dev": "vercel dev",
     "start": "vercel dev"
+  },
+  "dependencies": {
+    "meilisearch": "^0.54.0",
+    "pg": "^8.16.3",
+    "redis": "^5.10.0"
   }
 }
