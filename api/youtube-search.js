@@ -66,17 +66,8 @@ function fallbackExtractArtist(item) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// API DE BÚSQUEDA - SISTEMA DUAL (SAAVN + YOUTUBE FALLBACK)
+// API DE BÚSQUEDA - SISTEMA DUAL (SAAVN + YOUTUBE FALLBACK VIA DUCKDUCKGO)
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// Lista de instancias de Invidious/Piped (actualizado diciembre 2024)
-const YOUTUBE_PROXIES = [
-    { name: 'inv-nadeko', url: 'https://inv.nadeko.net', type: 'invidious' },
-    { name: 'yewtu', url: 'https://yewtu.be', type: 'invidious' },
-    { name: 'inv-nerdvpn', url: 'https://invidious.nerdvpn.de', type: 'invidious' },
-    { name: 'inv-privacyredirect', url: 'https://invidious.privacyredirect.com', type: 'invidious' },
-    { name: 'piped-kavin', url: 'https://pipedapi.kavin.rocks', type: 'piped' },
-];
 
 // Buscar en Saavn (fuente primaria)
 async function searchSaavn(query, limit = 30) {
@@ -97,65 +88,79 @@ async function searchSaavn(query, limit = 30) {
     }
 }
 
-// Buscar en YouTube via Invidious/Piped (fallback)
-async function searchYouTube(query, limit = 15) {
-    for (const proxy of YOUTUBE_PROXIES) {
-        try {
-            let url;
-            if (proxy.type === 'invidious') {
-                url = `${proxy.url}/api/v1/search?q=${encodeURIComponent(query)}&type=video`;
-            } else if (proxy.type === 'piped') {
-                url = `${proxy.url}/search?q=${encodeURIComponent(query)}&filter=music_songs`;
+// ═══════════════════════════════════════════════════════════════════════════════
+// Buscar videos via DuckDuckGo (más confiable que Invidious/Piped)
+// DuckDuckGo devuelve resultados de YouTube sin necesidad de API key
+// ═══════════════════════════════════════════════════════════════════════════════
+async function searchYouTube(query, limit = 10) {
+    try {
+        // DuckDuckGo HTML API - buscar videos
+        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query + ' site:youtube.com')}`;
+
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 10000);
+
+        const res = await fetch(ddgUrl, {
+            signal: ctrl.signal,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
+        });
+        clearTimeout(tid);
 
-            const ctrl = new AbortController();
-            const tid = setTimeout(() => ctrl.abort(), 8000);
-
-            const res = await fetch(url, { signal: ctrl.signal });
-            clearTimeout(tid);
-
-            if (!res.ok) continue;
-            const data = await res.json();
-
-            // Normalizar resultados al formato común
-            let results = [];
-
-            if (proxy.type === 'invidious') {
-                results = (data || []).slice(0, limit).map(item => ({
-                    id: item.videoId,
-                    name: item.title,
-                    title: item.title,
-                    artist: item.author || item.authorId || '',
-                    primaryArtists: item.author || '',
-                    duration: item.lengthSeconds || 0,
-                    image: item.videoThumbnails?.[0] ? [{ url: item.videoThumbnails[0].url, quality: '500x500' }] : [],
-                    source: 'youtube',
-                    _proxy: proxy.name
-                }));
-            } else if (proxy.type === 'piped') {
-                results = (data.items || []).slice(0, limit).map(item => ({
-                    id: item.url?.replace('/watch?v=', '') || '',
-                    name: item.title,
-                    title: item.title,
-                    artist: item.uploaderName || item.uploader || '',
-                    primaryArtists: item.uploaderName || '',
-                    duration: item.duration || 0,
-                    image: item.thumbnail ? [{ url: item.thumbnail, quality: '500x500' }] : [],
-                    source: 'youtube',
-                    _proxy: proxy.name
-                }));
-            }
-
-            if (results.length > 0) {
-                console.log(`[youtube] Found ${results.length} results via ${proxy.name}`);
-                return results;
-            }
-        } catch (e) {
-            console.log(`[youtube] ${proxy.name} failed:`, e.message);
-            continue;
+        if (!res.ok) {
+            console.log('[ddg] Request failed:', res.status);
+            return [];
         }
+
+        const html = await res.text();
+
+        // Extraer links de YouTube del HTML
+        const ytPattern = /https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/g;
+        const titlePattern = /<a[^>]*class="result__a"[^>]*>([^<]+)<\/a>/gi;
+
+        const videoIds = [];
+        let match;
+        while ((match = ytPattern.exec(html)) !== null && videoIds.length < limit) {
+            if (!videoIds.includes(match[1])) {
+                videoIds.push(match[1]);
+            }
+        }
+
+        // Extraer títulos
+        const titles = [];
+        while ((match = titlePattern.exec(html)) !== null && titles.length < limit * 2) {
+            const title = match[1].replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+            if (title && !titles.includes(title)) {
+                titles.push(title);
+            }
+        }
+
+        if (videoIds.length === 0) {
+            console.log('[ddg] No YouTube videos found');
+            return [];
+        }
+
+        console.log(`[ddg] Found ${videoIds.length} YouTube videos`);
+
+        // Construir resultados
+        const results = videoIds.slice(0, limit).map((id, i) => ({
+            id: id,
+            name: titles[i] || query,
+            title: titles[i] || query,
+            artist: '',  // DuckDuckGo no da artista separado
+            primaryArtists: '',
+            duration: 0,  // No disponible
+            image: [{ url: `https://img.youtube.com/vi/${id}/mqdefault.jpg`, quality: '500x500' }],
+            source: 'youtube',
+            _proxy: 'duckduckgo'
+        }));
+
+        return results;
+    } catch (e) {
+        console.log('[ddg] Error:', e.message);
+        return [];
     }
-    return [];
 }
 
 // Búsqueda combinada: Saavn primero, YouTube como fallback
