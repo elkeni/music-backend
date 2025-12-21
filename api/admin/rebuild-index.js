@@ -93,8 +93,8 @@ export default async function handler(req, res) {
         // MACRO: REBUILD MODE
         // -----------------------------------------------------------------------
         if (req.method === 'POST') {
-            const { batchSize = 500, offset = 0, limit = null, resetIndex = false } = req.body || {};
-            const effectiveBatchSize = Math.min(Math.max(1, batchSize), 1000); // Caps
+            const { batchSize = 100, offset = 0, limit = null, resetIndex = false } = req.body || {};
+            const effectiveBatchSize = Math.min(Math.max(1, batchSize), 500); // Serverless safety cap
 
             // Paso 0: Reset si se solicita (SOLO si offset es 0 para evitar accidentes en paginación manual)
             if (resetIndex && offset === 0) {
@@ -116,18 +116,36 @@ export default async function handler(req, res) {
                 });
             }
 
-            // Paso 2: Transformar (Compute Identity)
-            const itemsToIndex = songs.map(song => {
+            // Paso 2: Transformar (Recuperar Identity de DB o reconstruir)
+            // Importar dinámicamente getSongIdentity para evitar conflictos si no se importó arriba
+            const { getSongIdentity } = await import('../../src/music/persistence/song-repository.js');
+
+            const itemsToIndex = [];
+
+            // Procesar en paralelo para velocidad
+            const promises = songs.map(async (song) => {
                 try {
-                    return {
-                        song,
-                        identity: buildSongIdentity(song)
-                    };
+                    // Intento 1: Leer de DB (Consistencia con song-loader)
+                    let identity = await getSongIdentity(song.id);
+
+                    // Intento 2: Reconstruir al vuelo si falta
+                    if (!identity) {
+                        // console.warn(`[admin] Identity missing for ${song.id}, rebuilding...`);
+                        identity = buildSongIdentity(song);
+                    }
+
+                    if (identity) {
+                        return { song, identity };
+                    }
+                    return null;
                 } catch (e) {
-                    console.warn(`[admin] Error building identity for song ${song.id}:`, e.message);
+                    console.warn(`[admin] Error preparing song ${song.id}:`, e.message);
                     return null;
                 }
-            }).filter(item => item !== null);
+            });
+
+            const results = await Promise.all(promises);
+            itemsToIndex.push(...results.filter(item => item !== null));
 
             // Paso 3: Indexar en Meili
             const result = await indexSongsBatch(itemsToIndex);
