@@ -115,6 +115,24 @@ export function cleanTitle(title) {
         result = result.replace(pattern, '');
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIX 4: EXCEPCIONES SEMÁNTICAS
+    // Estos paréntesis SON parte del título real, no ruido editorial.
+    // Los normalizamos sin paréntesis para comparación más limpia.
+    // ═══════════════════════════════════════════════════════════════════════════
+    const SEMANTIC_SUBTITLE_PATTERNS = [
+        /\s*\(for a film\)/gi,
+        /\s*\(from the motion picture[^)]*\)/gi,
+        /\s*\(original motion picture soundtrack\)/gi,
+        /\s*\(from "[^"]+"\)/gi,
+        /\s*\(feat\.\s*[^)]+\)/gi,   // Keep feats but maybe normalize elsewhere
+        /\s*\(ft\.\s*[^)]+\)/gi,
+    ];
+
+    for (const pattern of SEMANTIC_SUBTITLE_PATTERNS) {
+        result = result.replace(pattern, '');
+    }
+
     // Colapsar múltiples espacios y trim
     result = result.replace(/\s+/g, ' ').trim();
 

@@ -172,17 +172,23 @@ async function handler(req, res) {
     evaluated.sort((a, b) => b.evaluation.scores.finalConfidence - a.evaluation.scores.finalConfidence);
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // FALLBACK: Nunca devolver 0 resultados válidos
+    // FALLBACK: Solo activar si NO hay targetTitle específico
+    // Si el usuario busca un track específico y no lo encontramos → NO_MATCH
+    // NO rescatar "algo cercano" que es otra canción del artista
     // ═══════════════════════════════════════════════════════════════════════════
     let results = evaluated.slice(0, limit);
 
-    if (results.length === 0 && rejected.length > 0) {
+    // Solo activar fallback si no hay targetTitle (navegación libre)
+    const hasSpecificTitle = !!(params.targetTitle && params.targetTitle.trim());
+
+    if (results.length === 0 && rejected.length > 0 && !hasSpecificTitle) {
         const salvageable = rejected
             .filter(r =>
                 !r.reason?.startsWith('forbidden_version') &&
-                r.identityScore >= 0.35
+                !r.reason?.startsWith('same_artist_different_track') &&
+                r.identityScore >= 0.5  // Umbral más alto
             )
-            .slice(0, 3);
+            .slice(0, 2);  // Menos resultados de fallback
 
         for (const rej of salvageable) {
             const originalItem = rawResults.find(r => (r.name || '') === rej.title);
@@ -205,7 +211,7 @@ async function handler(req, res) {
                             versionScore: 0.5,
                             durationScore: 0.5,
                             albumScore: 0.5,
-                            finalConfidence: Math.max(0.3, rej.identityScore * 0.8)
+                            finalConfidence: Math.max(0.4, rej.identityScore * 0.8)
                         },
                         version: { type: 'unknown', detail: null, isForbidden: false },
                         feats: [],
@@ -215,7 +221,7 @@ async function handler(req, res) {
             }
         }
         if (results.length > 0) {
-            console.log(`[search] FALLBACK: rescued ${results.length} from rejected`);
+            console.log(`[search] FALLBACK: rescued ${results.length} from rejected (no specific title)`);
         }
     }
 

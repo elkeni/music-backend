@@ -366,7 +366,21 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
         } else if (candTitle.includes(targetTitleNorm) || targetTitleNorm.includes(candTitle)) {
             result.titleScore = 0.95;
             result.titleMatch = 'contains';
-        } else if (targetWords.length > 0) {
+        }
+        // ═══════════════════════════════════════════════════════════════════
+        // FIX: Single-word title match (DUMBAI, Creep, etc)
+        // Si el título buscado es UNA sola palabra >= 4 chars
+        // y está contenida en el candidato → match alto
+        // ═══════════════════════════════════════════════════════════════════
+        else if (
+            targetWords.length === 1 &&
+            targetWords[0].length >= 4 &&
+            candTitle.includes(targetWords[0])
+        ) {
+            result.titleScore = 0.95;
+            result.titleMatch = 'single_word_exact';
+        }
+        else if (targetWords.length > 0) {
             const matched = targetWords.filter(w => candWords.some(cw => cw.includes(w) || w.includes(cw)));
             const ratio = matched.length / targetWords.length;
             result.titleScore = ratio;
@@ -545,11 +559,51 @@ export function evaluateCandidate(candidate, params) {
         (context.albumScore * weights.album)
     ) / totalWeight;
 
-    // DECISIÓN FINAL
-    const passed =
-        identity.passed ||
-        identityScore >= 0.4 ||
-        (identityScore >= 0.3 && durationScore >= 0.7);
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIX 3: TRACK IDENTITY LOCK
+    // Si el artista es exacto (>= 0.95) pero el título NO coincide (< 0.6),
+    // rechazar → esto es OTRA canción del mismo artista
+    // Evita: Radiohead - Creep → devuelve Let Down
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (
+        targetTitle &&
+        identity.artistScore >= 0.95 &&
+        identity.titleScore < 0.6
+    ) {
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'same_artist_different_track',
+            scores: {
+                identityScore: Math.round(identityScore * 100) / 100,
+                versionScore: Math.round(versionScore * 100) / 100,
+                durationScore: Math.round(durationScore * 100) / 100,
+                albumScore: Math.round(context.albumScore * 100) / 100,
+                finalConfidence: 0
+            },
+            version,
+            feats: extractFeats(candidate.name || candidate.title || ''),
+            details: { identity, context }
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIX 1: STRICT TITLE REQUIRED
+    // Si hay targetTitle, el título DEBE coincidir (titleScore >= 0.7)
+    // No permitir "otra del artista" cuando se busca un track específico
+    // ═══════════════════════════════════════════════════════════════════════════
+    const strictTitleRequired = !!(targetTitle && targetTitle.trim());
+
+    let passed;
+    if (strictTitleRequired) {
+        // Si buscamos un track específico → título DEBE coincidir
+        passed = identity.titleScore >= 0.7 && identity.artistScore >= 0.6;
+    } else {
+        // Navegación libre → comportamiento más permisivo
+        passed = identity.passed ||
+            identityScore >= 0.4 ||
+            (identityScore >= 0.3 && durationScore >= 0.7);
+    }
 
     const feats = extractFeats(candidate.name || candidate.title || '');
 
