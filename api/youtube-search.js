@@ -864,7 +864,86 @@ function evaluateRemixValidity(isRemix, authority, artistScore) {
  * Esto corrige el problema CA7RIEL & Paco Amoroso donde YouTube
  * puede tener "CA7RIEL, Paco Amoroso" o "Paco Amoroso & CA7RIEL"
  */
+/**
+ * FASE 1 (REDISEÑADA): VALIDACIÓN BINARIA DE IDENTIDAD
+ * Filosofía: "Exactitud o Muerte".
+ */
 function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
+    const details = {
+        titleMatch: 'none',
+        artistMatch: 'none',
+        titleScore: 0,
+        artistScore: 0,
+        isDuoMatch: false,
+        rejectionReason: null
+    };
+
+    // 1. LIMPIEZA & PREPARACIÓN
+    const rawCandidateTitle = candidate.name || '';
+    const rawCandidateArtist = extractArtistName(candidate) || '';
+    const candTitleNorm = normalize(cleanTitle(rawCandidateTitle));
+    const candArtistNorm = normalize(rawCandidateArtist);
+
+    // Target cleaning (remove intent)
+    let targetTitleClean = targetTitle || '';
+    const FORBIDDEN_INTENT = ['live', 'concert', 'vivo', 'en vivo', 'cover', 'karaoke', 'instrumental'];
+    for (const bad of FORBIDDEN_INTENT) {
+        targetTitleClean = targetTitleClean.replace(new RegExp(`\\b${bad}\\b`, 'gi'), '');
+    }
+    const targetTitleNorm = normalize(cleanTitle(targetTitleClean));
+    const targetArtistNorm = normalize(targetArtist || '');
+
+    // 2. VALIDACIÓN DE ARTISTA
+    let artistPass = false;
+    const duoInfo = detectDuo(targetArtist || '');
+
+    if (duoInfo) {
+        const hasMember = duoInfo.members.some(m => candArtistNorm.includes(normalize(m)));
+        if (hasMember || candArtistNorm.includes(normalize(duoInfo.canonicalName))) artistPass = true;
+    } else {
+        if (candArtistNorm.includes(targetArtistNorm) || targetArtistNorm.includes(candArtistNorm)) {
+            artistPass = true;
+        } else {
+            const tTokens = targetArtistNorm.split(' ').filter(t => t.length > 1);
+            const cTokens = candArtistNorm.split(' ');
+            const matchCount = tTokens.filter(t => cTokens.some(c => c.includes(t))).length;
+            if (tTokens.length > 0 && (matchCount / tTokens.length) >= 0.6) artistPass = true;
+        }
+    }
+
+    // Remix override
+    if (!artistPass && targetArtistNorm.length > 0) {
+        const isRemixTitle = /\bremix\b/i.test(candTitleNorm);
+        if (isRemixTitle && candTitleNorm.includes(targetArtistNorm)) artistPass = true;
+    }
+
+    if (!artistPass) return { score: 0, details: { ...details, rejectionReason: 'WRONG_ARTIST' } };
+    details.artistScore = 1.0;
+
+    // 3. VALIDACIÓN DE TÍTULO
+    const targetTokens = targetTitleNorm.split(' ').filter(w => w.length > 2);
+    if (targetTokens.length === 0) {
+        if (!candTitleNorm.includes(targetTitleNorm)) return { score: 0, details: { ...details, rejectionReason: 'WRONG_TITLE_SHORT' } };
+    } else {
+        let missCount = 0;
+        for (const token of targetTokens) {
+            if (!candTitleNorm.includes(token)) missCount++;
+        }
+        const allowedMisses = targetTokens.length > 3 ? 1 : 0;
+        if (missCount > allowedMisses) {
+            console.log(`[veto] Mismatch: Faltan ${missCount} tokens de "${targetTitleNorm}"`);
+            return { score: 0, details: { ...details, rejectionReason: 'WRONG_TITLE_MISMATCH' } };
+        }
+    }
+
+    details.titleScore = 1.0;
+    return { score: 1.0, details };
+}
+
+// ---------------------------------------------------------
+// OLD LOGIC (KEPT FOR REFERENCE BUT RENAMED)
+// ---------------------------------------------------------
+function _deprecated_evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     const details = {
         titleMatch: 'none',
         artistMatch: 'none',
