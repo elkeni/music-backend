@@ -128,16 +128,19 @@ async function handler(req, res) {
     const safeArtist = sanitizeForQuery(params.targetArtist);
     const safeTitle = sanitizeForQuery(params.targetTitle);
 
-    // Construir query efectiva
+    // Construir query efectiva (safe para la API)
     const effectiveQuery = (safeArtist && safeTitle)
-        ? `${safeArtist} ${safeTitle}`  // Sin comillas - la API las ignora de todas formas
+        ? `${safeArtist} ${safeTitle}`
         : query;
 
-    console.log(`[search] "${effectiveQuery}" | artist="${safeArtist}" track="${safeTitle}"`);
+    console.log(`[search] query="${effectiveQuery}" | originalArtist="${params.targetArtist}" originalTitle="${params.targetTitle}"`);
 
-    // Actualizar params con valores sanitizados para que el extractor use lo mismo
-    params.targetArtist = safeArtist;
-    params.targetTitle = safeTitle;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FASE 4: NO sobrescribir params
+    // La query usa safe values (para la API externa)
+    // Pero la evaluación usa los ORIGINALES (para preservar identidad)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // params.targetArtist y params.targetTitle quedan INTACTOS
 
     // Buscar con query efectiva
     const rawResults = await searchApi(effectiveQuery, limit * 3);

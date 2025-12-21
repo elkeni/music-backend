@@ -350,10 +350,16 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
         artistMatch: 'none'
     };
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FASE 2: NORMALIZACIÓN SIMÉTRICA
+    // Tanto candidato como target pasan por el MISMO pipeline
+    // Esto evita: "Exit Music (For A Film)" vs "Exit Music" (asimetría)
+    // ═══════════════════════════════════════════════════════════════════════════
     const candTitle = normalizeText(cleanTitle(candidate.name || candidate.title || ''));
-    // 🎤 Usar normalizeArtist para preservar identidad (Fred again.. ≠ Fred again)
     const candArtist = normalizeArtist(extractArtistInfo(candidate).primary);
-    const targetTitleNorm = normalizeText(targetTitle || '');
+
+    // 🔑 CRÍTICO: targetTitle también pasa por cleanTitle
+    const targetTitleNorm = normalizeText(cleanTitle(targetTitle || ''));
     const targetArtistNorm = normalizeArtist(targetArtist || '');
 
     // TÍTULO
@@ -526,6 +532,37 @@ export function evaluateCandidate(candidate, params) {
         };
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FASE 5: VERSION MATCHING
+    // Si el target pide remix, el candidato debe ser remix
+    // Si el target es original, penalizar candidatos remix (pero no rechazar)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const targetLower = (targetTitle || '').toLowerCase();
+    const targetWantsRemix = /\bremix\b/i.test(targetLower);
+    const targetWantsRemaster = /\bremaster/i.test(targetLower);
+
+    if (targetWantsRemix && version.type !== 'remix') {
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'version_mismatch:wanted_remix',
+            scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
+            version,
+            feats: []
+        };
+    }
+
+    if (targetWantsRemaster && version.type !== 'remaster') {
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'version_mismatch:wanted_remaster',
+            scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
+            version,
+            feats: []
+        };
+    }
+
     // FASE 1: IDENTIDAD PRIMARIA
     const identity = evaluatePrimaryIdentity(candidate, targetArtist, targetTitle);
 
@@ -573,13 +610,26 @@ export function evaluateCandidate(candidate, params) {
     const hasTargetTitle = !!(targetTitle && targetTitle.trim());
 
     if (hasTargetTitle) {
-        // El título debe ser "suficientemente exacto"
-        const titleIsExactEnough =
-            identity.titleScore >= 0.9 ||
+        // ═══════════════════════════════════════════════════════════════════
+        // FASE 3: HTC ESTRICTO
+        // Solo permitir matches realmente exactos
+        // partial_high solo si artista y duración también coinciden
+        // ═══════════════════════════════════════════════════════════════════
+
+        // Matches definitivamente exactos
+        const isDefinitelyCorrect =
             identity.titleMatch === 'exact' ||
             identity.titleMatch === 'contains' ||
             identity.titleMatch === 'single_word_exact' ||
-            identity.titleMatch === 'partial_high';
+            identity.titleScore >= 0.95;
+
+        // Matches condicionales (partial_high solo con condiciones)
+        const isConditionallyCorrect =
+            identity.titleMatch === 'partial_high' &&
+            identity.artistScore >= 0.8 &&
+            context.durationScore >= 0.7;
+
+        const titleIsExactEnough = isDefinitelyCorrect || isConditionallyCorrect;
 
         if (!titleIsExactEnough) {
             return {
