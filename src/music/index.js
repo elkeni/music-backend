@@ -67,6 +67,29 @@ export { normalizeText } from './normalization/normalize-text.js';
 export { cleanTitle } from './normalization/clean-title.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// EXTRACCIÓN (extraction/)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export {
+    // Detección de versiones
+    detectVersion,
+    detectForbiddenVersion,
+    detectValidVersion,
+    FORBIDDEN_VERSIONS,
+    ALLOWED_VERSIONS,
+    // Contenido basura
+    isTrashContent,
+    // Extracción de artista
+    extractArtistName,
+    extractArtistInfo,
+    extractFeats,
+    // Evaluación
+    evaluatePrimaryIdentity,
+    evaluateMusicalContext,
+    evaluateCandidate
+} from './extraction/youtube-extractor.js';
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // FASE 2: IDENTIDAD (identity/)
 // ═══════════════════════════════════════════════════════════════════════════════
 
