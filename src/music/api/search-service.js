@@ -226,7 +226,10 @@ async function getCandidateSongs(searchContext, debug = false) {
                 if (_songRepositoryModule) {
                     const songs = await _songRepositoryModule.getSongsByIds(candidateIds);
                     if (songs && songs.length > 0) {
-                        return songs;
+                        // 🛑 FILTRO TEMPORAL: Eliminar IDs de YouTube (11 chars)
+                        // porque api/youtube-streams solo soporta Saavn IDs actualmente.
+                        // Esto fuerza al frontend a usar fallback (Live Search).
+                        return songs.filter(s => !s.sourceId || s.sourceId.length !== 11);
                     }
                 }
             } else {
