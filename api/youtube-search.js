@@ -110,15 +110,34 @@ async function handler(req, res) {
     const ext = await loadExtractor();
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // FIX 3: Query efectiva con comillas
-    // Las comillas cambian radicalmente el comportamiento del buscador
-    // "Fred again.." "solo" → busca exactamente esas frases
+    // FIX 1, 2, 3: SANITIZACIÓN DE QUERY
     // ═══════════════════════════════════════════════════════════════════════════
-    const effectiveQuery = (params.targetArtist && params.targetTitle)
-        ? `"${params.targetArtist}" "${params.targetTitle}"`
+    // 1. Eliminar comillas internas (evita ""Fred again." "...")
+    // 2. Eliminar puntos finales (Fred again. → Fred again)
+    // 3. Normalizar espacios
+    // ═══════════════════════════════════════════════════════════════════════════
+    function sanitizeForQuery(str) {
+        if (!str) return '';
+        return str
+            .replace(/"/g, '')           // Quitar comillas
+            .replace(/\.+$/g, '')         // Quitar puntos finales (pero NO internos)
+            .replace(/\s+/g, ' ')         // Colapsar espacios
+            .trim();
+    }
+
+    const safeArtist = sanitizeForQuery(params.targetArtist);
+    const safeTitle = sanitizeForQuery(params.targetTitle);
+
+    // Construir query efectiva
+    const effectiveQuery = (safeArtist && safeTitle)
+        ? `${safeArtist} ${safeTitle}`  // Sin comillas - la API las ignora de todas formas
         : query;
 
-    console.log(`[search] "${effectiveQuery}" | artist="${params.targetArtist}" track="${params.targetTitle}"`);
+    console.log(`[search] "${effectiveQuery}" | artist="${safeArtist}" track="${safeTitle}"`);
+
+    // Actualizar params con valores sanitizados para que el extractor use lo mismo
+    params.targetArtist = safeArtist;
+    params.targetTitle = safeTitle;
 
     // Buscar con query efectiva
     const rawResults = await searchApi(effectiveQuery, limit * 3);

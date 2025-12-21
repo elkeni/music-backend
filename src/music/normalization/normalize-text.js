@@ -122,10 +122,15 @@ export function normalizeArtist(input) {
     // CA7RIEL → ca7riel
     result = result.replace(/[^a-z0-9.\-\s]/g, ' ');
 
-    // 6. Colapsar múltiples espacios
+    // 6. Eliminar puntos FINALES (pero NO internos)
+    // Fred again. → fred again
+    // dr. dre → dr. dre (preserva punto interno)
+    result = result.replace(/\.+$/g, '');
+
+    // 7. Colapsar múltiples espacios
     result = result.replace(/\s+/g, ' ');
 
-    // 7. trim
+    // 8. trim
     result = result.trim();
 
     return result;
