@@ -23,9 +23,13 @@ import { cleanTitle } from '../normalization/clean-title.js';
 
 // Versiones que causan RECHAZO INMEDIATO (no son de estudio)
 export const FORBIDDEN_VERSIONS = [
+    // Versiones alternativas
     'live', 'acoustic', 'unplugged', 'cover', 'karaoke',
     'instrumental', 'sped_up', 'slowed', 'nightcore', 'demo',
-    'tribute', 'en_vivo', 'acustico'
+    'tribute', 'en_vivo', 'acustico',
+    // Edits no oficiales
+    'turreo_edit', 'rkt_edit', 'bootleg', 'mashup',
+    'vip_edit', 'dj_edit', 'flip', 'rework'
 ];
 
 // Versiones PERMITIDAS (son de estudio o ediciones oficiales)
@@ -85,10 +89,57 @@ export function detectVersion(title) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // EDITS NO OFICIALES (rechazo inmediato) - NUEVO
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Turreo Edit / Turreo Remix (género argentino modificado)
+    if (/\bturreo\b/i.test(lower)) {
+        return { type: 'turreo_edit', detail: 'turreo', isForbidden: true };
+    }
+
+    // RKT / Rkt (Reggaetón argentino modificado)
+    if (/\brkt\b/i.test(lower) || /\brktero\b/i.test(lower)) {
+        return { type: 'rkt_edit', detail: 'rkt', isForbidden: true };
+    }
+
+    // Bootleg
+    if (/\bbootleg\b/i.test(lower)) {
+        return { type: 'bootleg', detail: null, isForbidden: true };
+    }
+
+    // Mashup
+    if (/\bmashup\b/i.test(lower) || /\bmash\s*up\b/i.test(lower)) {
+        return { type: 'mashup', detail: null, isForbidden: true };
+    }
+
+    // VIP (DJ edit no oficial)
+    if (/\bvip\b/i.test(lower) && /\b(edit|mix|version)\b/i.test(lower)) {
+        return { type: 'vip_edit', detail: null, isForbidden: true };
+    }
+
+    // Edit genérico (con contexto de DJ/productor)
+    if (/\bedit\b/i.test(lower) && !/\bradio\s*edit\b/i.test(lower)) {
+        // Solo rechazar si es un edit tipo DJ (no radio edit)
+        if (/\b(dj|club|party|turreo|rkt|bootleg)\b/i.test(lower)) {
+            return { type: 'dj_edit', detail: 'club_edit', isForbidden: true };
+        }
+    }
+
+    // Flip (reinterpretación no oficial)
+    if (/\bflip\b/i.test(lower)) {
+        return { type: 'flip', detail: null, isForbidden: true };
+    }
+
+    // Rework (no oficial generalmente)
+    if (/\brework\b/i.test(lower)) {
+        return { type: 'rework', detail: null, isForbidden: true };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // VERSIONES PERMITIDAS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Remix (PERMITIDO)
+    // Remix (PERMITIDO - remix oficial)
     if (/\bremix\b/i.test(lower)) {
         const match = title.match(/\(([^)]*remix[^)]*)\)/i) || title.match(/\[([^\]]*remix[^\]]*)\]/i);
         return { type: 'remix', detail: match ? match[1].trim() : null, isForbidden: false };
@@ -100,7 +151,7 @@ export function detectVersion(title) {
         return { type: 'remaster', detail: yearMatch ? (yearMatch[1] || yearMatch[2]) : null, isForbidden: false };
     }
 
-    // Radio Edit (PERMITIDO)
+    // Radio Edit (PERMITIDO - es oficial)
     if (/\bradio\s*(edit|version)\b/i.test(lower)) {
         return { type: 'radio_edit', detail: null, isForbidden: false };
     }
