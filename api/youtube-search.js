@@ -66,14 +66,22 @@ function fallbackExtractArtist(item) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// API DE BÚSQUEDA
+// API DE BÚSQUEDA - SISTEMA DUAL (SAAVN + YOUTUBE FALLBACK)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function searchApi(query, limit = 30) {
+// Lista de instancias de Invidious/Piped (fallback entre ellas)
+const YOUTUBE_PROXIES = [
+    { name: 'invidious-1', url: 'https://invidious.io.lol', type: 'invidious' },
+    { name: 'invidious-2', url: 'https://vid.puffyan.us', type: 'invidious' },
+    { name: 'piped', url: 'https://pipedapi.kavin.rocks', type: 'piped' },
+];
+
+// Buscar en Saavn (fuente primaria)
+async function searchSaavn(query, limit = 30) {
     try {
         const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=${limit}`;
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 15000);
+        const tid = setTimeout(() => ctrl.abort(), 10000);
 
         const res = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
@@ -82,9 +90,93 @@ async function searchApi(query, limit = 30) {
         const data = await res.json();
         return data?.data?.results || [];
     } catch (e) {
-        console.log('[search] Error:', e.message);
+        console.log('[saavn] Error:', e.message);
         return [];
     }
+}
+
+// Buscar en YouTube via Invidious/Piped (fallback)
+async function searchYouTube(query, limit = 15) {
+    for (const proxy of YOUTUBE_PROXIES) {
+        try {
+            let url;
+            if (proxy.type === 'invidious') {
+                url = `${proxy.url}/api/v1/search?q=${encodeURIComponent(query)}&type=video`;
+            } else if (proxy.type === 'piped') {
+                url = `${proxy.url}/search?q=${encodeURIComponent(query)}&filter=music_songs`;
+            }
+
+            const ctrl = new AbortController();
+            const tid = setTimeout(() => ctrl.abort(), 8000);
+
+            const res = await fetch(url, { signal: ctrl.signal });
+            clearTimeout(tid);
+
+            if (!res.ok) continue;
+            const data = await res.json();
+
+            // Normalizar resultados al formato común
+            let results = [];
+
+            if (proxy.type === 'invidious') {
+                results = (data || []).slice(0, limit).map(item => ({
+                    id: item.videoId,
+                    name: item.title,
+                    title: item.title,
+                    artist: item.author || item.authorId || '',
+                    primaryArtists: item.author || '',
+                    duration: item.lengthSeconds || 0,
+                    image: item.videoThumbnails?.[0] ? [{ url: item.videoThumbnails[0].url, quality: '500x500' }] : [],
+                    source: 'youtube',
+                    _proxy: proxy.name
+                }));
+            } else if (proxy.type === 'piped') {
+                results = (data.items || []).slice(0, limit).map(item => ({
+                    id: item.url?.replace('/watch?v=', '') || '',
+                    name: item.title,
+                    title: item.title,
+                    artist: item.uploaderName || item.uploader || '',
+                    primaryArtists: item.uploaderName || '',
+                    duration: item.duration || 0,
+                    image: item.thumbnail ? [{ url: item.thumbnail, quality: '500x500' }] : [],
+                    source: 'youtube',
+                    _proxy: proxy.name
+                }));
+            }
+
+            if (results.length > 0) {
+                console.log(`[youtube] Found ${results.length} results via ${proxy.name}`);
+                return results;
+            }
+        } catch (e) {
+            console.log(`[youtube] ${proxy.name} failed:`, e.message);
+            continue;
+        }
+    }
+    return [];
+}
+
+// Búsqueda combinada: Saavn primero, YouTube como fallback
+async function searchApi(query, limit = 30) {
+    // 1. Intentar Saavn primero
+    const saavnResults = await searchSaavn(query, limit);
+
+    if (saavnResults.length > 0) {
+        console.log(`[search] Saavn: ${saavnResults.length} results`);
+        return saavnResults;
+    }
+
+    // 2. Fallback a YouTube si Saavn devuelve 0
+    console.log('[search] Saavn returned 0, trying YouTube...');
+    const ytResults = await searchYouTube(query, Math.min(limit, 15));
+
+    if (ytResults.length > 0) {
+        console.log(`[search] YouTube fallback: ${ytResults.length} results`);
+        return ytResults;
+    }
+
+    console.log('[search] No results from any source');
+    return [];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
