@@ -1048,7 +1048,13 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     }
 
     // Score combinado - artista tiene más peso
-    const combinedScore = (details.titleScore * 0.35) + (details.artistScore * 0.65);
+    let combinedScore = (details.titleScore * 0.35) + (details.artistScore * 0.65);
+
+    // ⭐ VETO POR TÍTULO (Estricto): Si el título no coincide, es basura.
+    // Cap a 0.25 para asegurar que falle los filtros (threshold suele ser 0.35-0.45)
+    if (details.titleScore < 0.4) {
+        combinedScore = Math.min(combinedScore, 0.25);
+    }
 
     return {
         score: combinedScore,
