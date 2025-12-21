@@ -1050,10 +1050,12 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     // Score combinado - artista tiene más peso
     let combinedScore = (details.titleScore * 0.35) + (details.artistScore * 0.65);
 
-    // ⭐ VETO POR TÍTULO (Estricto): Si el título no coincide, es basura.
-    // Cap a 0.25 para asegurar que falle los filtros (threshold suele ser 0.35-0.45)
+    // ⭐ VETO TOTAL POR TÍTULO: Si el título no se parece, ES BASURA.
+    // Si buscas "Thunderstruck" y sale "Back In Black", titleScore será muy bajo.
+    // MATAMOS el resultado (score 0) para que ni siquiera se considere.
     if (details.titleScore < 0.4) {
-        combinedScore = Math.min(combinedScore, 0.25);
+        console.log(`[veto] Título no coincide: "${targetTitle}" vs "${candidateTitle}" (score: ${details.titleScore})`);
+        combinedScore = 0.0;
     }
 
     return {
