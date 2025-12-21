@@ -62,11 +62,22 @@ async function loadModules() {
     if (_modulesLoaded) return;
 
     try {
-        [_redisCacheModule, _candidateRetrieverModule, _songRepositoryModule] = await Promise.all([
+        const [redisModule, candidateModule, videoRepoModule, dbModule] = await Promise.all([
             import('../cache/redis-cache.js').catch(() => null),
             import('../search-index/candidate-retriever.js'),
-            import('../persistence/song-repository.js').catch(() => null)
+            import('../persistence/song-repository.js').catch(() => null),
+            import('../persistence/db.js').catch(() => null)
         ]);
+
+        _redisCacheModule = redisModule;
+        _candidateRetrieverModule = candidateModule;
+        _songRepositoryModule = videoRepoModule;
+
+        // Init DB if available
+        if (dbModule) {
+            await dbModule.initDB();
+        }
+
         _modulesLoaded = true;
     } catch (e) {
         console.error('[search-service] Error loading runtime modules:', e);
