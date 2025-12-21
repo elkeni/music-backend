@@ -533,15 +533,20 @@ export function evaluateCandidate(candidate, params) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // FASE 5: VERSION MATCHING
-    // Si el target pide remix, el candidato debe ser remix
-    // Si el target es original, penalizar candidatos remix (pero no rechazar)
+    // FASE 5: VERSION MATCHING (FLEXIBLE)
+    // Si el target pide remix, el candidato debe ser remix O contener 'remix' en título
     // ═══════════════════════════════════════════════════════════════════════════
     const targetLower = (targetTitle || '').toLowerCase();
+    const candTitleLower = (candidate.name || candidate.title || '').toLowerCase();
+
     const targetWantsRemix = /\bremix\b/i.test(targetLower);
     const targetWantsRemaster = /\bremaster/i.test(targetLower);
 
-    if (targetWantsRemix && version.type !== 'remix') {
+    // Para remix: verificar detectVersion O que el título contenga 'remix'
+    const candidateIsRemix = version.type === 'remix' || /\bremix\b/i.test(candTitleLower);
+    const candidateIsRemaster = version.type === 'remaster' || /\bremaster/i.test(candTitleLower);
+
+    if (targetWantsRemix && !candidateIsRemix) {
         return {
             passed: false,
             rejected: true,
@@ -552,7 +557,7 @@ export function evaluateCandidate(candidate, params) {
         };
     }
 
-    if (targetWantsRemaster && version.type !== 'remaster') {
+    if (targetWantsRemaster && !candidateIsRemaster) {
         return {
             passed: false,
             rejected: true,

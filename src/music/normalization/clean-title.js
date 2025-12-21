@@ -110,6 +110,14 @@ export function cleanTitle(title) {
 
     let result = title;
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIX: Normalizar apóstrofes y comillas especiales
+    // 'Beto's Horns' (Unicode) → 'Beto's Horns' (ASCII)
+    // ═══════════════════════════════════════════════════════════════════════════
+    result = result
+        .replace(/['']/g, "'")      // Apóstrofes especiales → normal
+        .replace(/[""]/g, '"');     // Comillas especiales → normal
+
     // Aplicar cada patrón de limpieza
     for (const pattern of EDITORIAL_NOISE_PATTERNS) {
         result = result.replace(pattern, '');

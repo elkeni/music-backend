@@ -49,6 +49,9 @@ export function normalizeText(input) {
 
     let result = input;
 
+    // 0. Normalizar apóstrofes y comillas especiales (Unicode → ASCII)
+    result = result.replace(/['']/g, "'").replace(/[""]/g, '"');
+
     // 1. Convertir a minúsculas
     result = result.toLowerCase();
 
