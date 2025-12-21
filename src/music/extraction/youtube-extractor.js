@@ -560,46 +560,58 @@ export function evaluateCandidate(candidate, params) {
     ) / totalWeight;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // FIX 3: TRACK IDENTITY LOCK
-    // Si el artista es exacto (>= 0.95) pero el título NO coincide (< 0.6),
-    // rechazar → esto es OTRA canción del mismo artista
-    // Evita: Radiohead - Creep → devuelve Let Down
+    // 🔐 FASE A: HARD TITLE CONSTRAINT (HTC)
     // ═══════════════════════════════════════════════════════════════════════════
-    if (
-        targetTitle &&
-        identity.artistScore >= 0.95 &&
-        identity.titleScore < 0.6
-    ) {
-        return {
-            passed: false,
-            rejected: true,
-            rejectReason: 'same_artist_different_track',
-            scores: {
-                identityScore: Math.round(identityScore * 100) / 100,
-                versionScore: Math.round(versionScore * 100) / 100,
-                durationScore: Math.round(durationScore * 100) / 100,
-                albumScore: Math.round(context.albumScore * 100) / 100,
-                finalConfidence: 0
-            },
-            version,
-            feats: extractFeats(candidate.name || candidate.title || ''),
-            details: { identity, context }
-        };
+    // Si el usuario pidió un título específico, NINGÚN resultado sin match
+    // de título puede pasar, aunque todo lo demás sea perfecto.
+    // 
+    // Esto NO es un score. Es una REGLA BINARIA.
+    // El score solo sirve para ordenar candidatos que YA pasaron esta regla.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const hasTargetTitle = !!(targetTitle && targetTitle.trim());
+
+    if (hasTargetTitle) {
+        // El título debe ser "suficientemente exacto"
+        const titleIsExactEnough =
+            identity.titleScore >= 0.9 ||
+            identity.titleMatch === 'exact' ||
+            identity.titleMatch === 'contains' ||
+            identity.titleMatch === 'single_word_exact' ||
+            identity.titleMatch === 'partial_high';
+
+        if (!titleIsExactEnough) {
+            return {
+                passed: false,
+                rejected: true,
+                rejectReason: 'title_not_matching_target',
+                scores: {
+                    identityScore: Math.round(identityScore * 100) / 100,
+                    versionScore: Math.round(versionScore * 100) / 100,
+                    durationScore: Math.round(durationScore * 100) / 100,
+                    albumScore: Math.round(context.albumScore * 100) / 100,
+                    finalConfidence: 0
+                },
+                version,
+                feats: extractFeats(candidate.name || candidate.title || ''),
+                details: { identity, context }
+            };
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // FIX 1: STRICT TITLE REQUIRED
-    // Si hay targetTitle, el título DEBE coincidir (titleScore >= 0.7)
-    // No permitir "otra del artista" cuando se busca un track específico
+    // 🏆 FASE B: SCORING (solo para ranking entre candidatos válidos)
     // ═══════════════════════════════════════════════════════════════════════════
-    const strictTitleRequired = !!(targetTitle && targetTitle.trim());
+    // Si llegamos aquí, el candidato YA pasó el Hard Title Constraint.
+    // El score solo decide cuál es el MEJOR entre los correctos.
+    // ═══════════════════════════════════════════════════════════════════════════
 
     let passed;
-    if (strictTitleRequired) {
-        // Si buscamos un track específico → título DEBE coincidir
-        passed = identity.titleScore >= 0.7 && identity.artistScore >= 0.6;
+    if (hasTargetTitle) {
+        // Ya pasó HTC, solo verificar que artista tenga algo de match
+        passed = identity.artistScore >= 0.4;
     } else {
-        // Navegación libre → comportamiento más permisivo
+        // Navegación libre (sin targetTitle específico)
         passed = identity.passed ||
             identityScore >= 0.4 ||
             (identityScore >= 0.3 && durationScore >= 0.7);
