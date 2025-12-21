@@ -69,11 +69,13 @@ function fallbackExtractArtist(item) {
 // API DE BÚSQUEDA - SISTEMA DUAL (SAAVN + YOUTUBE FALLBACK)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Lista de instancias de Invidious/Piped (fallback entre ellas)
+// Lista de instancias de Invidious/Piped (actualizado diciembre 2024)
 const YOUTUBE_PROXIES = [
-    { name: 'invidious-1', url: 'https://invidious.io.lol', type: 'invidious' },
-    { name: 'invidious-2', url: 'https://vid.puffyan.us', type: 'invidious' },
-    { name: 'piped', url: 'https://pipedapi.kavin.rocks', type: 'piped' },
+    { name: 'inv-nadeko', url: 'https://inv.nadeko.net', type: 'invidious' },
+    { name: 'yewtu', url: 'https://yewtu.be', type: 'invidious' },
+    { name: 'inv-nerdvpn', url: 'https://invidious.nerdvpn.de', type: 'invidious' },
+    { name: 'inv-privacyredirect', url: 'https://invidious.privacyredirect.com', type: 'invidious' },
+    { name: 'piped-kavin', url: 'https://pipedapi.kavin.rocks', type: 'piped' },
 ];
 
 // Buscar en Saavn (fuente primaria)
@@ -345,6 +347,58 @@ async function handler(req, res) {
         }
         if (results.length > 0) {
             console.log(`[search] FALLBACK: rescued ${results.length} from rejected (no specific title)`);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FALLBACK NIVEL 2: YouTube directo si todo fue rechazado
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (results.length === 0 && rejected.length > 0 && hasSpecificTitle) {
+        console.log('[search] All Saavn results rejected, trying YouTube directly...');
+
+        // Buscar en YouTube directamente
+        const ytResults = await searchYouTube(effectiveQuery, 10);
+
+        if (ytResults.length > 0) {
+            console.log(`[search] YouTube backup found ${ytResults.length} candidates`);
+
+            // Evaluar candidatos de YouTube
+            for (const item of ytResults.slice(0, 5)) {
+                let evaluation;
+
+                if (ext) {
+                    evaluation = ext.evaluateCandidate(item, params);
+                } else {
+                    evaluation = {
+                        passed: true,
+                        rejected: false,
+                        rejectReason: null,
+                        scores: { identityScore: 0.5, versionScore: 1.0, durationScore: 1.0, albumScore: 0.5, finalConfidence: 0.5 },
+                        version: { type: 'unknown', detail: null, isForbidden: false },
+                        feats: []
+                    };
+                }
+
+                if (evaluation.passed) {
+                    const artistName = ext ? ext.extractArtistInfo(item).full : (item.artist || item.primaryArtists || '');
+
+                    results.push({
+                        title: item.name || item.title || '',
+                        artist: artistName,
+                        album: item.album?.name || item.album || null,
+                        duration: item.duration || 0,
+                        year: null,
+                        videoId: item.id,
+                        thumbnail: item.image?.[0]?.url || '',
+                        source: 'youtube',
+                        evaluation
+                    });
+                }
+            }
+
+            if (results.length > 0) {
+                console.log(`[search] YouTube backup: ${results.length} passed evaluation`);
+            }
         }
     }
 
