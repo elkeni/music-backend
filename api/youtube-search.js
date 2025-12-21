@@ -875,7 +875,22 @@ function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
 
     // === TÍTULO ===
     const candidateTitle = normalize(cleanTitle(candidate.name || ''));
-    const targetTitleNorm = normalize(cleanTitle(targetTitle || ''));
+
+    // Limpieza AGRESIVA del target: quitar "live", "concert", etc. para comparar
+    // Esto permite que si buscas "Thunderstruck Live", aceptemos "Thunderstruck" (Studio)
+    let rawTarget = targetTitle || '';
+
+    // Quitar patrones prohibidos del target para que no ensucien la comparación
+    const FORBIDDEN_WORDS = ['live', 'concert', 'vivo', 'cover', 'karaoke', 'instrumental'];
+    let cleanTarget = normalize(cleanTitle(rawTarget));
+
+    for (const badWord of FORBIDDEN_WORDS) {
+        // Reemplazar palabra completa para evitar dañar "alive" o similares
+        const regex = new RegExp(`\\b${badWord}\\b`, 'gi');
+        cleanTarget = cleanTarget.replace(regex, '');
+    }
+
+    const targetTitleNorm = cleanTarget.trim();
     const targetTitleWords = targetTitleNorm.split(' ').filter(w => w.length > 1);
 
     if (!candidateTitle || targetTitleWords.length === 0) {
