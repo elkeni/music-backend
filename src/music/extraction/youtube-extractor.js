@@ -14,7 +14,7 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-import { normalizeText } from '../normalization/normalize-text.js';
+import { normalizeText, normalizeArtist } from '../normalization/normalize-text.js';
 import { cleanTitle } from '../normalization/clean-title.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -351,9 +351,10 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     };
 
     const candTitle = normalizeText(cleanTitle(candidate.name || candidate.title || ''));
-    const candArtist = normalizeText(extractArtistInfo(candidate).primary);
+    // 🎤 Usar normalizeArtist para preservar identidad (Fred again.. ≠ Fred again)
+    const candArtist = normalizeArtist(extractArtistInfo(candidate).primary);
     const targetTitleNorm = normalizeText(targetTitle || '');
-    const targetArtistNorm = normalizeText(targetArtist || '');
+    const targetArtistNorm = normalizeArtist(targetArtist || '');
 
     // TÍTULO
     if (targetTitleNorm) {
@@ -640,4 +641,4 @@ export function evaluateCandidate(candidate, params) {
 }
 
 // Re-exportar funciones de normalización para conveniencia
-export { normalizeText, cleanTitle };
+export { normalizeText, normalizeArtist, cleanTitle };

@@ -72,3 +72,61 @@ export function normalizeText(input) {
 
     return result;
 }
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 🎤 NORMALIZE ARTIST - Normalización especial para nombres de artistas
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * Los artistas NO se normalizan igual que los títulos.
+ * 
+ * PRESERVAR:
+ * - Puntos (.) → "Fred again.." NO es igual a "Fred again"
+ * - Números → "CA7RIEL" debe mantenerse
+ * - Guiones bajos en algunos casos
+ * 
+ * ELIMINAR:
+ * - Acentos
+ * - Símbolos especiales (excepto .)
+ * - & se convierte en espacio (para colaboraciones)
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ */
+
+/**
+ * Normaliza nombre de artista preservando identidad
+ * 
+ * @param {string} input - Nombre del artista
+ * @returns {string} Nombre normalizado preservando puntos
+ */
+export function normalizeArtist(input) {
+    if (!input || typeof input !== 'string') {
+        return '';
+    }
+
+    let result = input;
+
+    // 1. Convertir a minúsculas
+    result = result.toLowerCase();
+
+    // 2. Eliminar acentos
+    result = result.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+    // 3. NO eliminar leetspeak para artistas (CA7RIEL debe ser ca7riel)
+
+    // 4. Reemplazar & por espacio (colaboraciones)
+    result = result.replace(/&/g, ' ');
+
+    // 5. Eliminar símbolos EXCEPTO puntos (.) y guiones (-)
+    // Fred again.. → fred again..
+    // CA7RIEL → ca7riel
+    result = result.replace(/[^a-z0-9.\-\s]/g, ' ');
+
+    // 6. Colapsar múltiples espacios
+    result = result.replace(/\s+/g, ' ');
+
+    // 7. trim
+    result = result.trim();
+
+    return result;
+}

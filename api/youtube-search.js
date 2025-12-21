@@ -109,10 +109,19 @@ async function handler(req, res) {
     // Cargar módulo de extracción
     const ext = await loadExtractor();
 
-    console.log(`[search] "${query}" | artist="${params.targetArtist}" track="${params.targetTitle}"`);
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIX 3: Query efectiva con comillas
+    // Las comillas cambian radicalmente el comportamiento del buscador
+    // "Fred again.." "solo" → busca exactamente esas frases
+    // ═══════════════════════════════════════════════════════════════════════════
+    const effectiveQuery = (params.targetArtist && params.targetTitle)
+        ? `"${params.targetArtist}" "${params.targetTitle}"`
+        : query;
 
-    // Buscar
-    const rawResults = await searchApi(query, limit * 3);
+    console.log(`[search] "${effectiveQuery}" | artist="${params.targetArtist}" track="${params.targetTitle}"`);
+
+    // Buscar con query efectiva
+    const rawResults = await searchApi(effectiveQuery, limit * 3);
 
     // Evaluar
     const evaluated = [];
