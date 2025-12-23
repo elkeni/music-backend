@@ -182,11 +182,17 @@ async function handler(req, res) {
         });
     }
 
+    // 🚀 MOBILE OPTIMIZATION: Soporte headers Save-Data
+    const saveData = req.headers['save-data'] === 'on';
+
     try {
         // 🚀 PREFETCH: Verificar primero si tenemos streams pre-cargados
         const prefetchKey = buildPrefetchKey(videoId, confidence);
         const prefetched = prefetchCache.get(prefetchKey);
-        if (prefetched && Date.now() - prefetched.timestamp < PREFETCH_TTL) {
+
+        // NOTA: Prefetch ignora Save-Data por ahora (el prefetch se hace background)
+        // Si queremos ser estrictos, deberíamos pre-fetchear también versión mobile.
+        if (prefetched && Date.now() - prefetched.timestamp < PREFETCH_TTL && !saveData) {
             console.log(`[🚀 prefetch] HIT for: ${prefetchKey}`);
             return res.status(200).json({
                 success: true,
@@ -197,7 +203,8 @@ async function handler(req, res) {
 
         // ⭐ CACHE: Verificar si ya tenemos streams para este video
         const minQuality = getMinQualityForConfidence(confidence);
-        const cacheKey = `${videoId}|${minQuality}`;
+        // FIX: Incluir saveData en la key para no mezclar calidades
+        const cacheKey = `${videoId}|${minQuality}|${saveData ? 'saver' : 'std'}`;
 
         const cached = streamCache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
@@ -261,8 +268,7 @@ async function handler(req, res) {
             });
         }
 
-        // 🚀 MOBILE OPTIMIZATION: Soporte headers Save-Data
-        const saveData = req.headers['save-data'] === 'on';
+
 
         // ⭐ NUEVO: Seleccionar streams según política de calidad
         // Si saveData es true, forzamos política 'mobile_saver' (max 128kbps, preferible 96kbps)
