@@ -435,7 +435,7 @@ export async function executeSearch(query, params, limit = 10) {
     }
 
     // FALLBACK NIVEL 2: YouTube directo si todo fue rechazado
-    if (results.length === 0 && rejected.length > 0 && hasSpecificTitle) {
+    if (results.length === 0 && rejected.length > 0) {
         console.log('[search] All Saavn results rejected, trying YouTube directly...');
 
         // Buscar en YouTube directamente
