@@ -90,10 +90,6 @@ async function searchSaavn(query, limit = 30) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Buscar videos via DuckDuckGo (más confiable que Invidious/Piped)
-// DuckDuckGo devuelve resultados de YouTube sin necesidad de API key
-// ═══════════════════════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════════════════════
 // ESTRATEGIA DE BÚSQUEDA YOUTUBE: MULTI-LAYER FALLBACK
 // 1. YouTube-SR (Librería robusta) - Primera opción por calidad
 // 2. DuckDuckGo (Scraping) - Backup si falla youtube-sr o rate limits
@@ -226,7 +222,7 @@ async function searchViaDDG(query, limit = 10) {
         }
 
         if (!titleMatchFound) {
-            console.warn('[ddg] ⚠️ IDs found but patterns for Tille failed. DDG HTML structure changed.');
+            console.warn('[ddg] ⚠️ IDs found but patterns for Title failed. DDG HTML structure changed.');
         }
 
         // Construir objetos

@@ -294,7 +294,6 @@ async function handler(req, res) {
         const { filtered, selectedQuality, policy } = selection;
 
         if (filtered.length === 0) {
-            // ... (error handling igual)
             return res.status(404).json({
                 success: false,
                 error: 'No audio streams meet quality requirements'
@@ -306,6 +305,7 @@ async function handler(req, res) {
 
         console.log(`[youtube-streams] Selected ${audioStreams.length} streams | Quality: ${selectedQuality}kbps | Policy: ${policy}`);
 
+        // ⭐ CACHE: Guardar resultado (reusar cacheKey ya definido arriba)
         const responseData = {
             audioStreams,
             qualityInfo: {
@@ -318,11 +318,11 @@ async function handler(req, res) {
             }
         };
 
-        // ... (cache logic igual)
         streamCache.set(cacheKey, {
             timestamp: Date.now(),
             result: responseData
         });
+        console.log(`[stream-cache] SET for: ${cacheKey}`);
 
         // CACHE HEADER CRUCIAL PARA MÓVIL
         res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=1800');
