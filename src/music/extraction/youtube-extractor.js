@@ -386,6 +386,7 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
 
     // normalizar target completo
     const targetTitleFullNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitle || '')));
+    const targetArtistNorm = normalizeArtist(targetArtist || '');
 
     // normalizar target "main" (sin paréntesis)
     // Ej: "Voltage (See You Again)" -> "Voltage"
