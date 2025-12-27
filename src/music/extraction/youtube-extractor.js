@@ -384,41 +384,64 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     const candTitle = normalizeText(cleanSpanishTitle(cleanTitle(rawCandTitle)));
     const candArtist = normalizeArtist(extractArtistInfo(candidate).primary);
 
-    const targetTitleNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitle || '')));
-    const targetArtistNorm = normalizeArtist(targetArtist || '');
+    // normalizar target completo
+    const targetTitleFullNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitle || '')));
 
-    // TÍTULO
-    if (targetTitleNorm) {
-        const targetWords = targetTitleNorm.split(' ').filter(w => w.length > 2);
+    // normalizar target "main" (sin paréntesis)
+    // Ej: "Voltage (See You Again)" -> "Voltage"
+    let targetTitleMainRaw = targetTitle || '';
+    if (targetTitleMainRaw.includes('(') || targetTitleMainRaw.includes('[')) {
+        targetTitleMainRaw = targetTitleMainRaw.replace(/[\(\[].*?[\)\]]/g, '');
+    }
+    const targetTitleMainNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitleMainRaw)));
+
+    // Usaremos la lógica de matching para ambos y nos quedamos con el mejor resultado
+    const evaluateTitleAgainst = (targetNorm) => {
+        if (!targetNorm) return { score: 0, match: 'none' };
+
+        const targetWords = targetNorm.split(' ').filter(w => w.length > 2);
         const candWords = candTitle.split(' ');
 
-        if (candTitle === targetTitleNorm) {
-            result.titleScore = 1.0;
-            result.titleMatch = 'exact';
-        } else if (candTitle.includes(targetTitleNorm) || targetTitleNorm.includes(candTitle)) {
-            result.titleScore = 0.95;
-            result.titleMatch = 'contains';
-        }
-        // FIX: Match de palabra única más permisivo (>= 3 chars)
-        else if (
+        if (candTitle === targetNorm) {
+            return { score: 1.0, match: 'exact' };
+        } else if (candTitle.includes(targetNorm) || targetNorm.includes(candTitle)) {
+            return { score: 0.95, match: 'contains' };
+        } else if (
             targetWords.length === 1 &&
             targetWords[0].length >= 3 &&
             candTitle.includes(targetWords[0])
         ) {
-            result.titleScore = 0.95;
-            result.titleMatch = 'single_word_exact';
-        }
-        else if (targetWords.length > 0) {
+            return { score: 0.95, match: 'single_word_exact' };
+        } else if (targetWords.length > 0) {
             const matched = targetWords.filter(w => candWords.some(cw => cw.includes(w) || w.includes(cw)));
             const ratio = matched.length / targetWords.length;
-            result.titleScore = ratio;
-
-            // Umbrales de coincidencia parcial ligeramente relajados
-            result.titleMatch = ratio >= 0.65 ? 'partial_high' : ratio >= 0.35 ? 'partial_low' : 'none';
+            const matchType = ratio >= 0.65 ? 'partial_high' : ratio >= 0.35 ? 'partial_low' : 'none';
+            return { score: ratio, match: matchType };
         }
+        return { score: 0, match: 'none' };
+    };
+
+    // Calcular scores
+    const resFull = evaluateTitleAgainst(targetTitleFullNorm);
+    const resMain = (targetTitleMainNorm && targetTitleMainNorm !== targetTitleFullNorm)
+        ? evaluateTitleAgainst(targetTitleMainNorm)
+        : { score: 0, match: 'none' };
+
+    // Quedarse con el mejor
+    if (resMain.score > resFull.score) {
+        result.titleScore = resMain.score;
+        result.titleMatch = resMain.match;
     } else {
-        result.titleScore = 0.5;
-        result.titleMatch = 'no_target';
+        result.titleScore = resFull.score;
+        result.titleMatch = resFull.match;
+    }
+
+    if (!result.titleMatch || result.titleMatch === 'none') {
+        // Fallback si nada matcheó
+        if (!targetTitleFullNorm) {
+            result.titleScore = 0.5;
+            result.titleMatch = 'no_target';
+        }
     }
 
     // ARTISTA (más importante que título)
