@@ -117,23 +117,19 @@ export function normalizeArtist(input) {
 
     // 3. NO eliminar leetspeak para artistas (CA7RIEL debe ser ca7riel)
 
-    // 4. Reemplazar & por espacio (colaboraciones)
-    result = result.replace(/&/g, ' ');
+    // 4. PRESERVAR signos especiales solicitados (@, &, $)
+    // El usuario quiere encontrar "nombres raros" con estos signos.
 
-    // 5. Eliminar símbolos EXCEPTO puntos (.) y guiones (-)
+    // 5. Eliminar símbolos EXCEPTO puntos (.), guiones (-), @, &
     // Fred again.. → fred again..
     // CA7RIEL → ca7riel
-    result = result.replace(/[^a-z0-9.\-\s]/g, ' ');
+    // Joey Bada$$ → joey bada$$ (si permitimos $) -> Vamos a permitir $ también
+    result = result.replace(/[^a-z0-9.\-\@\&\$\!\s]/g, ' ');
 
-    // 6. Eliminar puntos FINALES (pero NO internos)
-    // Fred again. → fred again
-    // dr. dre → dr. dre (preserva punto interno)
-    result = result.replace(/\.+$/g, '');
-
-    // 7. Colapsar múltiples espacios
+    // 6. Colapsar múltiples espacios
     result = result.replace(/\s+/g, ' ');
 
-    // 8. trim
+    // 7. trim
     result = result.trim();
 
     return result;

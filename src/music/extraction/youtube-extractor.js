@@ -89,17 +89,17 @@ export function detectVersion(title) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // EDITS NO OFICIALES (rechazo inmediato) - NUEVO
+    // EDITS LATINOS / MODERNOS (Aceptados como Remix/Original)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Turreo Edit / Turreo Remix (género argentino modificado)
+    // Turreo Edit / Turreo Remix (género argentino modificado - PERMITIDO)
     if (/\bturreo\b/i.test(lower)) {
-        return { type: 'turreo_edit', detail: 'turreo', isForbidden: true };
+        return { type: 'remix', detail: 'turreo', isForbidden: false };
     }
 
-    // RKT / Rkt (Reggaetón argentino modificado)
+    // RKT / Rkt (Reggaetón argentino modificado - PERMITIDO)
     if (/\brkt\b/i.test(lower) || /\brktero\b/i.test(lower)) {
-        return { type: 'rkt_edit', detail: 'rkt', isForbidden: true };
+        return { type: 'remix', detail: 'rkt', isForbidden: false };
     }
 
     // Bootleg
@@ -237,6 +237,32 @@ export function isTrashContent(candidate) {
 // EXTRACCIÓN DE ARTISTA
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// NORMALIZACIÓN ADICIONAL - LATAM FRIENDLY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function cleanSpanishTitle(text) {
+    if (!text) return '';
+    return text
+        // Video Clips / Oficiales
+        .replace(/\(video\s*oficial\)/gi, '')
+        .replace(/\[video\s*oficial\]/gi, '')
+        .replace(/\(official\s*video\)/gi, '')
+        .replace(/\(video\s*clip\)/gi, '')
+        .replace(/\(videoclip\)/gi, '')
+        .replace(/\(clip\s*oficial\)/gi, '')
+        .replace(/\(video\s*lyric\)/gi, '')
+        .replace(/\(letra\s*oficial\)/gi, '')
+        .replace(/\(audio\s*oficial\)/gi, '')
+        .replace(/\(visualizer\)/gi, '')
+        .replace(/\(sesi[oó]n\s*en\s*vivo\)/gi, '')
+        // Separadores comunes
+        .replace(/\s+\|\s+/g, ' ')
+        .replace(/\s+-\s+/g, ' ')
+        // Trim final
+        .trim();
+}
+
 /**
  * Extrae el nombre del artista de un item
  * Compatible con múltiples formatos de API
@@ -351,15 +377,14 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // FASE 2: NORMALIZACIÓN SIMÉTRICA
-    // Tanto candidato como target pasan por el MISMO pipeline
-    // Esto evita: "Exit Music (For A Film)" vs "Exit Music" (asimetría)
+    // FASE 2: NORMALIZACIÓN SIMÉTRICA (MEJORADA PARA LATAM)
     // ═══════════════════════════════════════════════════════════════════════════
-    const candTitle = normalizeText(cleanTitle(candidate.name || candidate.title || ''));
+    // Aplicamos cleanTitle + cleanSpanishTitle local
+    const rawCandTitle = candidate.name || candidate.title || '';
+    const candTitle = normalizeText(cleanSpanishTitle(cleanTitle(rawCandTitle)));
     const candArtist = normalizeArtist(extractArtistInfo(candidate).primary);
 
-    // 🔑 CRÍTICO: targetTitle también pasa por cleanTitle
-    const targetTitleNorm = normalizeText(cleanTitle(targetTitle || ''));
+    const targetTitleNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitle || '')));
     const targetArtistNorm = normalizeArtist(targetArtist || '');
 
     // TÍTULO
@@ -374,14 +399,10 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
             result.titleScore = 0.95;
             result.titleMatch = 'contains';
         }
-        // ═══════════════════════════════════════════════════════════════════
-        // FIX: Single-word title match (DUMBAI, Creep, etc)
-        // Si el título buscado es UNA sola palabra >= 4 chars
-        // y está contenida en el candidato → match alto
-        // ═══════════════════════════════════════════════════════════════════
+        // FIX: Match de palabra única más permisivo (>= 3 chars)
         else if (
             targetWords.length === 1 &&
-            targetWords[0].length >= 4 &&
+            targetWords[0].length >= 3 &&
             candTitle.includes(targetWords[0])
         ) {
             result.titleScore = 0.95;
@@ -391,7 +412,9 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
             const matched = targetWords.filter(w => candWords.some(cw => cw.includes(w) || w.includes(cw)));
             const ratio = matched.length / targetWords.length;
             result.titleScore = ratio;
-            result.titleMatch = ratio >= 0.7 ? 'partial_high' : ratio >= 0.4 ? 'partial_low' : 'none';
+
+            // Umbrales de coincidencia parcial ligeramente relajados
+            result.titleMatch = ratio >= 0.65 ? 'partial_high' : ratio >= 0.35 ? 'partial_low' : 'none';
         }
     } else {
         result.titleScore = 0.5;
@@ -425,13 +448,14 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
         result.artistMatch = 'no_target';
     }
 
-    // DECISIÓN (artista manda)
+    // DECISIÓN (artist centric, relajada)
     result.combinedScore = (result.artistScore * 0.6) + (result.titleScore * 0.4);
 
+    // CRITERIOS DE PASO RELAJADOS (Más resultados)
     result.passed =
-        result.artistScore >= 0.8 ||
-        result.combinedScore >= 0.5 ||
-        (result.artistScore >= 0.6 && result.titleScore >= 0.4);
+        result.artistScore >= 0.75 || // Era 0.8
+        result.combinedScore >= 0.45 || // Era 0.5
+        (result.artistScore >= 0.55 && result.titleScore >= 0.35); // Era 0.6 y 0.4
 
     return result;
 }
@@ -463,10 +487,11 @@ export function evaluateMusicalContext(candidate, targetDuration, targetAlbum) {
         const diff = Math.abs(candDuration - targetDur);
         result.durationDiff = diff;
 
-        if (diff <= 5) result.durationScore = 1.0;
-        else if (diff <= 15) result.durationScore = 0.9;
-        else if (diff <= 30) result.durationScore = 0.75;
-        else if (diff <= 60) result.durationScore = 0.5;
+        // Tolerancia aumentada para duración
+        if (diff <= 8) result.durationScore = 1.0; // Era 5
+        else if (diff <= 20) result.durationScore = 0.9; // Era 15
+        else if (diff <= 40) result.durationScore = 0.75; // Era 30
+        else if (diff <= 70) result.durationScore = 0.5; // Era 60
         else result.durationScore = 0.3;
     }
 
@@ -578,18 +603,18 @@ export function evaluateCandidate(candidate, params) {
     const identityScore = identity.combinedScore;
     const versionScore = version.type === 'original' ? 1.0 :
         version.type === 'remaster' ? 0.98 :
-            version.type === 'remix' ? 0.85 :
+            version.type === 'remix' ? 0.90 : // Subido de 0.85
                 version.type === 'radio_edit' ? 0.95 : 0.9;
     const durationScore = context.durationScore;
 
-    // Pesos dinámicos
+    // Pesos dinámicos (Ajustados para priorizar identidad)
     const hasTargetAlbum = !!(targetAlbum && targetAlbum.trim());
     const hasTargetDuration = targetDuration > 0;
 
     const weights = {
-        identity: 0.55,
+        identity: 0.60, // Subido de 0.55
         version: 0.15,
-        duration: hasTargetDuration ? 0.25 : 0.05,
+        duration: hasTargetDuration ? 0.20 : 0.05, // Bajado levemente para tolerar diferencias
         album: hasTargetAlbum ? 0.05 : 0.00
     };
 
@@ -603,36 +628,21 @@ export function evaluateCandidate(candidate, params) {
     ) / totalWeight;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 🔐 FASE A: HARD TITLE CONSTRAINT (HTC)
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Si el usuario pidió un título específico, NINGÚN resultado sin match
-    // de título puede pasar, aunque todo lo demás sea perfecto.
-    // 
-    // Esto NO es un score. Es una REGLA BINARIA.
-    // El score solo sirve para ordenar candidatos que YA pasaron esta regla.
+    // 🔐 FASE A: HARD TITLE CONSTRAINT (HTC) - RELAJADO
     // ═══════════════════════════════════════════════════════════════════════════
 
     const hasTargetTitle = !!(targetTitle && targetTitle.trim());
 
     if (hasTargetTitle) {
-        // ═══════════════════════════════════════════════════════════════════
-        // FASE 3: HTC ESTRICTO
-        // Solo permitir matches realmente exactos
-        // partial_high solo si artista y duración también coinciden
-        // ═══════════════════════════════════════════════════════════════════
-
-        // Matches definitivamente exactos
         const isDefinitelyCorrect =
             identity.titleMatch === 'exact' ||
             identity.titleMatch === 'contains' ||
             identity.titleMatch === 'single_word_exact' ||
-            identity.titleScore >= 0.95;
+            identity.titleScore >= 0.90; // Bajado de 0.95
 
-        // Matches condicionales (partial_high solo con condiciones)
         const isConditionallyCorrect =
-            identity.titleMatch === 'partial_high' &&
-            identity.artistScore >= 0.8 &&
-            context.durationScore >= 0.7;
+            (identity.titleMatch === 'partial_high' && identity.artistScore >= 0.7) || // Bajado artistReq
+            (identity.titleMatch === 'partial_low' && identity.artistScore >= 0.85 && context.durationScore >= 0.8);
 
         const titleIsExactEnough = isDefinitelyCorrect || isConditionallyCorrect;
 
@@ -656,21 +666,16 @@ export function evaluateCandidate(candidate, params) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 🏆 FASE B: SCORING (solo para ranking entre candidatos válidos)
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Si llegamos aquí, el candidato YA pasó el Hard Title Constraint.
-    // El score solo decide cuál es el MEJOR entre los correctos.
+    // 🏆 FASE B: SCORING / UMBRAL FINAL
     // ═══════════════════════════════════════════════════════════════════════════
 
     let passed;
     if (hasTargetTitle) {
-        // Ya pasó HTC, solo verificar que artista tenga algo de match
-        passed = identity.artistScore >= 0.4;
+        passed = identity.artistScore >= 0.35; // Bajado de 0.4 para permitir errores tipográficos leves
     } else {
-        // Navegación libre (sin targetTitle específico)
         passed = identity.passed ||
-            identityScore >= 0.4 ||
-            (identityScore >= 0.3 && durationScore >= 0.7);
+            identityScore >= 0.35 ||
+            (identityScore >= 0.25 && durationScore >= 0.7);
     }
 
     const feats = extractFeats(candidate.name || candidate.title || '');
