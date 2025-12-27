@@ -60,14 +60,31 @@ let initError = null;
  * @returns {DBConfig}
  */
 function getConfig() {
-    // Producción: usar DATABASE_URL
+    // Producción: parsear DATABASE_URL manualmente con WHATWG URL API
+    // Esto evita que pg use internamente el obsoleto url.parse()
     if (process.env.DATABASE_URL) {
-        return {
-            connectionString: process.env.DATABASE_URL,
-            // Supabase y la mayoría de DBs en la nube requieren SSL
-            ssl: { rejectUnauthorized: false },
-            ...DEFAULT_CONFIG
-        };
+        try {
+            const dbUrl = new URL(process.env.DATABASE_URL);
+
+            return {
+                host: dbUrl.hostname,
+                port: parseInt(dbUrl.port || '5432', 10),
+                user: dbUrl.username,
+                password: dbUrl.password,
+                database: dbUrl.pathname.substring(1), // Remove leading '/'
+                // Supabase y la mayoría de DBs en la nube requieren SSL
+                ssl: { rejectUnauthorized: false },
+                ...DEFAULT_CONFIG
+            };
+        } catch (error) {
+            console.warn('[db] Failed to parse DATABASE_URL, using fallback:', error.message);
+            // Fallback: si falla el parseo, usar connectionString como última opción
+            return {
+                connectionString: process.env.DATABASE_URL,
+                ssl: { rejectUnauthorized: false },
+                ...DEFAULT_CONFIG
+            };
+        }
     }
 
     // Desarrollo: usar variables individuales
