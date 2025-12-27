@@ -115,8 +115,8 @@ export function cleanTitle(title) {
     // 'Beto's Horns' (Unicode) → 'Beto's Horns' (ASCII)
     // ═══════════════════════════════════════════════════════════════════════════
     result = result
-        .replace(/['']/g, "'")      // Apóstrofes especiales → normal
-        .replace(/[""]/g, '"');     // Comillas especiales → normal
+        .replace(/[\u2018\u2019\u201B\u0060\u00B4]/g, "'") // Apóstrofes Unicode y acentos agudos usados como tal
+        .replace(/[\u201C\u201D\u00AB\u00BB]/g, '"');      // Comillas Unicode
 
     // Aplicar cada patrón de limpieza
     for (const pattern of EDITORIAL_NOISE_PATTERNS) {
