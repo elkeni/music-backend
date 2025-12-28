@@ -24,13 +24,7 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-/**
- * Mapa de leetspeak a caracteres normales
- */
-const LEET_MAP = {
-    // Eliminamos números para evitar romper nombres como "Grupo 5", "Maroon 5", "Blink 182"
-    // '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't'
-};
+
 
 /**
  * Normaliza texto de forma pura y determinística
@@ -45,8 +39,7 @@ export function normalizeText(input) {
 
     let result = input;
 
-    // 0. Normalizar apóstrofes y comillas especiales (Unicode → ASCII)
-    result = result.replace(/['']/g, "'").replace(/[""]/g, '"');
+    // 0. (Paso eliminado: la normalización de comillas estaba vacía/rota y era redundante)
 
     // 1. Convertir a minúsculas
     result = result.toLowerCase();
@@ -54,8 +47,7 @@ export function normalizeText(input) {
     // 2. Eliminar acentos (normalización Unicode NFD + eliminar diacríticos)
     result = result.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-    // 3. Eliminar leetspeak
-    result = result.split('').map(char => LEET_MAP[char] || char).join('');
+    // 3. (Paso eliminado: leetspeak desactivado intencionalmente)
 
     // 4. Reemplazar & y / por espacio
     result = result.replace(/[&\/]/g, ' ');

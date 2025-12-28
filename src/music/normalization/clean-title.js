@@ -32,68 +32,46 @@
  */
 const EDITORIAL_NOISE_PATTERNS = [
     // Official markers
-    /\(official\s*(music\s*)?video\)/gi,
-    /\(official\s*audio\)/gi,
-    /\(official\)/gi,
-    /\[official\s*(music\s*)?video\]/gi,
-    /\[official\s*audio\]/gi,
-    /\[official\]/gi,
+    /[\[\(]official\s*(music\s*)?video[\]\)]/gi,
+    /[\[\(]official\s*audio[\]\)]/gi,
+    /[\[\(]official[\]\)]/gi,
 
     // Spanish equivalents
-    /\(video\s*oficial\)/gi,
-    /\(audio\s*oficial\)/gi,
-    /\(oficial\)/gi,
-    /\[video\s*oficial\]/gi,
-    /\[audio\s*oficial\]/gi,
+    /[\[\(]video\s*oficial[\]\)]/gi,
+    /[\[\(]audio\s*oficial[\]\)]/gi,
+    /[\[\(]oficial[\]\)]/gi,
 
     // Lyrics markers
-    /\(lyrics?\s*(video)?\)/gi,
-    /\(lyric\s*video\)/gi,
-    /\[lyrics?\s*(video)?\]/gi,
-    /\[lyric\s*video\]/gi,
-    /\(con\s*letra\)/gi,
-    /\[con\s*letra\]/gi,
+    /[\[\(]lyrics?\s*(video)?[\]\)]/gi,
+    /[\[\(]lyric\s*video[\]\)]/gi,
+    /[\[\(]con\s*letra[\]\)]/gi,
 
     // Quality markers
-    /\(hd\)/gi,
-    /\(hq\)/gi,
-    /\(4k\)/gi,
-    /\(1080p?\)/gi,
-    /\(720p?\)/gi,
-    /\[hd\]/gi,
-    /\[hq\]/gi,
-    /\[4k\]/gi,
-    /\[1080p?\]/gi,
-    /\[720p?\]/gi,
+    /[\[\(]hd[\]\)]/gi,
+    /[\[\(]hq[\]\)]/gi,
+    /[\[\(]4k[\]\)]/gi,
+    /[\[\(]1080p?[\]\)]/gi,
+    /[\[\(]720p?[\]\)]/gi,
 
     // Audio/Video generic
-    /\(audio\)/gi,
-    /\(video\)/gi,
-    /\[audio\]/gi,
-    /\[video\]/gi,
-    /\(videoclip\)/gi,
-    /\[videoclip\]/gi,
+    /[\[\(]audio[\]\)]/gi,
+    /[\[\(]video[\]\)]/gi,
+    /[\[\(]videoclip[\]\)]/gi,
 
     // Explicit/Clean markers
-    /\(explicit\)/gi,
-    /\(clean\s*version\)/gi,
-    /\[explicit\]/gi,
-    /\[clean\]/gi,
+    /[\[\(]explicit[\]\)]/gi,
+    /[\[\(]clean(\s*version)?[\]\)]/gi,
 
     // Soundtrack/From markers
-    /\(from\s+["'][^"']+["']\)/gi,
-    /\(from\s+[^)]+\)/gi,
-    /\[from\s+[^\]]+\]/gi,
+    /[\[\(]from\s+["'][^"']+["'][\]\)]/gi,
+    /[\[\(]from\s+[^)\]]+[\]\)]/gi,
 
     // Premiere/New markers
-    /\(premiere\)/gi,
-    /\(new\s*\d*\)/gi,
-    /\[premiere\]/gi,
-    /\[new\]/gi,
+    /[\[\(]premiere[\]\)]/gi,
+    /[\[\(]new\s*\d*[\]\)]/gi,
 
     // Year markers alone (not part of remaster)
-    /\(\d{4}\)$/gi,
-    /\[\d{4}\]$/gi
+    /[\[\(]\d{4}[\]\)]$/gi
 ];
 
 /**
