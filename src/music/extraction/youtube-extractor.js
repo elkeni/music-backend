@@ -213,7 +213,22 @@ const TRASH_PATTERNS = [
  * @returns {{ isTrash: boolean, reason: string|null }}
  */
 export function isTrashContent(candidate) {
-    const title = (candidate.name || candidate.title || '').toLowerCase();
+    const rawTitle = candidate.name || candidate.title || '';
+    const title = rawTitle.toLowerCase();
+
+    // 1. RECHAZO POR LONGITUD EXCESIVA (Anti-Spam / Anti-Mix)
+    // El usuario reportó problemas con títulos enormes tipo "Los Pegaditos: ... / ... / ..."
+    if (title.length > 100) {
+        return { isTrash: true, reason: `title_too_long:${title.length}` };
+    }
+
+    // 2. RECHAZO POR EXCESO DE SEPARADORES (Tracklists en título)
+    // Si tiene muchos " / " o " | " es casi seguro un mix o álbum completo en un video
+    const separators = (title.match(/\s[\/\|]\s/g) || []).length;
+    if (separators >= 3) {
+        return { isTrash: true, reason: 'multi_song_title_detected' };
+    }
+
     const artist = normalizeText(extractArtistName(candidate));
 
     // Artistas basura
