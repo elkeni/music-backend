@@ -24,9 +24,9 @@ import { cleanTitle } from '../normalization/clean-title.js';
 // Versiones que causan RECHAZO INMEDIATO (no son de estudio)
 export const FORBIDDEN_VERSIONS = [
     // Versiones alternativas
-    'acoustic', 'unplugged', 'cover', 'karaoke',
+    'live', 'acoustic', 'unplugged', 'cover', 'karaoke',
     'instrumental', 'sped_up', 'slowed', 'nightcore', 'demo',
-    'tribute', 'acustico', // 'live' y 'en_vivo' removidos para permitir GRUPO 5 y similares
+    'tribute', 'en_vivo', 'acustico',
     // Edits no oficiales
     'turreo_edit', 'rkt_edit', 'bootleg', 'mashup',
     'vip_edit', 'dj_edit', 'flip', 'rework'
@@ -49,12 +49,12 @@ export function detectVersion(title) {
     // VERSIONES PROHIBIDAS (rechazo inmediato)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Live (ahora PERMITIDO con PENALIZACIÓN DE SCORE)
+    // Live
     if (/\blive\b/i.test(lower) && /\b(at|from|in|on|session)\b/i.test(lower)) {
-        return { type: 'live', detail: 'live_venue', isForbidden: false };
+        return { type: 'live', detail: 'live_venue', isForbidden: true };
     }
     if (/\b(live\s*version|live\s*performance|en\s*vivo|en\s*directo)\b/i.test(lower)) {
-        return { type: 'live', detail: 'live_explicit', isForbidden: false };
+        return { type: 'live', detail: 'live_explicit', isForbidden: true };
     }
 
     // Acoustic / Unplugged
@@ -450,26 +450,13 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
         const artistInfo = extractArtistInfo(candidate);
         const allArtists = [artistInfo.primary, ...artistInfo.collaborators].map(a => normalizeText(a));
 
-        // 🆕 FLAT COMPARISON (Ignorar espacios)
-        // Resuelve "Grupo 5" vs "Grupo5"
-        const toFlat = (s) => s.replace(/\s+/g, '');
-        const candArtistFlat = toFlat(candArtist);
-        const targetArtistFlat = toFlat(targetArtistNorm);
-        const allArtistsFlat = allArtists.map(toFlat);
-
-        if (candArtist === targetArtistNorm || candArtistFlat === targetArtistFlat) {
+        if (candArtist === targetArtistNorm) {
             result.artistScore = 1.0;
             result.artistMatch = 'exact';
-        } else if (
-            candArtist.includes(targetArtistNorm) || targetArtistNorm.includes(candArtist) ||
-            candArtistFlat.includes(targetArtistFlat) || targetArtistFlat.includes(candArtistFlat)
-        ) {
+        } else if (candArtist.includes(targetArtistNorm) || targetArtistNorm.includes(candArtist)) {
             result.artistScore = 0.95;
             result.artistMatch = 'contains';
-        } else if (
-            allArtists.some(a => a.includes(targetArtistNorm) || targetArtistNorm.includes(a)) ||
-            allArtistsFlat.some(a => a.includes(targetArtistFlat) || targetArtistFlat.includes(a))
-        ) {
+        } else if (allArtists.some(a => a.includes(targetArtistNorm) || targetArtistNorm.includes(a))) {
             result.artistScore = 0.85;
             result.artistMatch = 'collaborator';
         } else {
@@ -583,38 +570,21 @@ export function evaluateCandidate(candidate, params) {
     // FASE 2: VERSIÓN PROHIBIDA
     const version = detectVersion(candidate.name || candidate.title || '');
 
-    // 🆕 EXCEPCIÓN: Si el target pide explícitamente esta versión, la permitimos
-    // Ej: User busca "Tu Hipocresía (En Vivo)", entonces permitimos Live
-    let forcedAllowed = false;
-    if (version.isForbidden && targetTitle) {
-        const targetLower = targetTitle.toLowerCase();
+    if (version.isForbidden) {
+        // EXCEPCIÓN: Si el usuario busca explícitamente "En Vivo" o "Live", permitimos la versión
+        const targetWantsLive = /\b(live|en\s*vivo|concierto|vivo|directo)\b/i.test(targetTitle || '');
+        const isLiveException = targetWantsLive && (version.type === 'live' || version.type === 'cover');
 
-        // Mapeo simple de tipos prohibidos a keywords en título
-        const allowTriggers = {
-            'live': ['live', 'en vivo', 'en directo'],
-            'acoustic': ['acoustic', 'acustico', 'unplugged'],
-            'cover': ['cover'],
-            'remix': ['remix'], // Remix ya no es forbidden pero por si acaso
-            'slowed': ['slowed'],
-            'sped_up': ['sped up', 'speed up'],
-            'demo': ['demo']
-        };
-
-        const triggers = allowTriggers[version.type] || [version.type.replace('_', ' ')];
-        if (triggers.some(t => targetLower.includes(t))) {
-            forcedAllowed = true;
+        if (!isLiveException) {
+            return {
+                passed: false,
+                rejected: true,
+                rejectReason: `forbidden_version:${version.type}`,
+                scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
+                version,
+                feats: []
+            };
         }
-    }
-
-    if (version.isForbidden && !forcedAllowed) {
-        return {
-            passed: false,
-            rejected: true,
-            rejectReason: `forbidden_version:${version.type}`,
-            scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
-            version,
-            feats: []
-        };
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -664,9 +634,7 @@ export function evaluateCandidate(candidate, params) {
     const versionScore = version.type === 'original' ? 1.0 :
         version.type === 'remaster' ? 0.98 :
             version.type === 'remix' ? 0.90 : // Subido de 0.85
-                version.type === 'radio_edit' ? 0.95 :
-                    version.type === 'live' ? 0.75 : // Live penalizado pero aceptable
-                        0.9;
+                version.type === 'radio_edit' ? 0.95 : 0.9;
     const durationScore = context.durationScore;
 
     // Pesos dinámicos (Ajustados para priorizar identidad)
