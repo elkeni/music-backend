@@ -24,9 +24,9 @@ import { cleanTitle } from '../normalization/clean-title.js';
 // Versiones que causan RECHAZO INMEDIATO (no son de estudio)
 export const FORBIDDEN_VERSIONS = [
     // Versiones alternativas
-    'live', 'acoustic', 'unplugged', 'cover', 'karaoke',
+    'acoustic', 'unplugged', 'cover', 'karaoke',
     'instrumental', 'sped_up', 'slowed', 'nightcore', 'demo',
-    'tribute', 'en_vivo', 'acustico',
+    'tribute', 'acustico', // 'live' y 'en_vivo' removidos para permitir GRUPO 5 y similares
     // Edits no oficiales
     'turreo_edit', 'rkt_edit', 'bootleg', 'mashup',
     'vip_edit', 'dj_edit', 'flip', 'rework'
@@ -49,12 +49,12 @@ export function detectVersion(title) {
     // VERSIONES PROHIBIDAS (rechazo inmediato)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Live
+    // Live (ahora PERMITIDO con PENALIZACIÓN DE SCORE)
     if (/\blive\b/i.test(lower) && /\b(at|from|in|on|session)\b/i.test(lower)) {
-        return { type: 'live', detail: 'live_venue', isForbidden: true };
+        return { type: 'live', detail: 'live_venue', isForbidden: false };
     }
     if (/\b(live\s*version|live\s*performance|en\s*vivo|en\s*directo)\b/i.test(lower)) {
-        return { type: 'live', detail: 'live_explicit', isForbidden: true };
+        return { type: 'live', detail: 'live_explicit', isForbidden: false };
     }
 
     // Acoustic / Unplugged
@@ -570,7 +570,30 @@ export function evaluateCandidate(candidate, params) {
     // FASE 2: VERSIÓN PROHIBIDA
     const version = detectVersion(candidate.name || candidate.title || '');
 
-    if (version.isForbidden) {
+    // 🆕 EXCEPCIÓN: Si el target pide explícitamente esta versión, la permitimos
+    // Ej: User busca "Tu Hipocresía (En Vivo)", entonces permitimos Live
+    let forcedAllowed = false;
+    if (version.isForbidden && targetTitle) {
+        const targetLower = targetTitle.toLowerCase();
+
+        // Mapeo simple de tipos prohibidos a keywords en título
+        const allowTriggers = {
+            'live': ['live', 'en vivo', 'en directo'],
+            'acoustic': ['acoustic', 'acustico', 'unplugged'],
+            'cover': ['cover'],
+            'remix': ['remix'], // Remix ya no es forbidden pero por si acaso
+            'slowed': ['slowed'],
+            'sped_up': ['sped up', 'speed up'],
+            'demo': ['demo']
+        };
+
+        const triggers = allowTriggers[version.type] || [version.type.replace('_', ' ')];
+        if (triggers.some(t => targetLower.includes(t))) {
+            forcedAllowed = true;
+        }
+    }
+
+    if (version.isForbidden && !forcedAllowed) {
         return {
             passed: false,
             rejected: true,
@@ -628,7 +651,9 @@ export function evaluateCandidate(candidate, params) {
     const versionScore = version.type === 'original' ? 1.0 :
         version.type === 'remaster' ? 0.98 :
             version.type === 'remix' ? 0.90 : // Subido de 0.85
-                version.type === 'radio_edit' ? 0.95 : 0.9;
+                version.type === 'radio_edit' ? 0.95 :
+                    version.type === 'live' ? 0.75 : // Live penalizado pero aceptable
+                        0.9;
     const durationScore = context.durationScore;
 
     // Pesos dinámicos (Ajustados para priorizar identidad)
