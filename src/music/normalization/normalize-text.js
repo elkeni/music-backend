@@ -28,12 +28,9 @@
  * Mapa de leetspeak a caracteres normales
  */
 const LEET_MAP = {
-    '0': 'o',
-    '1': 'i',
-    '3': 'e',
-    '4': 'a',
-    '5': 's',
-    '7': 't'
+    // '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't'
+    // SE ELIMINA LEETSPEAK DE NÚMEROS para evitar romper nombres como "Grupo 5", "Maroon 5", "Mambo No. 5"
+    // Solo se podrían mapear símbolos si fuera necesario, pero los números ES CRÍTICO preservarlos.
 };
 
 /**

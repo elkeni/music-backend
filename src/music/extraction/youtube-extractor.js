@@ -450,13 +450,26 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
         const artistInfo = extractArtistInfo(candidate);
         const allArtists = [artistInfo.primary, ...artistInfo.collaborators].map(a => normalizeText(a));
 
-        if (candArtist === targetArtistNorm) {
+        // 🆕 FLAT COMPARISON (Ignorar espacios)
+        // Resuelve "Grupo 5" vs "Grupo5"
+        const toFlat = (s) => s.replace(/\s+/g, '');
+        const candArtistFlat = toFlat(candArtist);
+        const targetArtistFlat = toFlat(targetArtistNorm);
+        const allArtistsFlat = allArtists.map(toFlat);
+
+        if (candArtist === targetArtistNorm || candArtistFlat === targetArtistFlat) {
             result.artistScore = 1.0;
             result.artistMatch = 'exact';
-        } else if (candArtist.includes(targetArtistNorm) || targetArtistNorm.includes(candArtist)) {
+        } else if (
+            candArtist.includes(targetArtistNorm) || targetArtistNorm.includes(candArtist) ||
+            candArtistFlat.includes(targetArtistFlat) || targetArtistFlat.includes(candArtistFlat)
+        ) {
             result.artistScore = 0.95;
             result.artistMatch = 'contains';
-        } else if (allArtists.some(a => a.includes(targetArtistNorm) || targetArtistNorm.includes(a))) {
+        } else if (
+            allArtists.some(a => a.includes(targetArtistNorm) || targetArtistNorm.includes(a)) ||
+            allArtistsFlat.some(a => a.includes(targetArtistFlat) || targetArtistFlat.includes(a))
+        ) {
             result.artistScore = 0.85;
             result.artistMatch = 'collaborator';
         } else {
