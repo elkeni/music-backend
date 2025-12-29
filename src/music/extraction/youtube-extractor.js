@@ -646,10 +646,32 @@ export function evaluateCandidate(candidate, params) {
 
     // CALCULAR SCORES
     const identityScore = identity.combinedScore;
-    const versionScore = version.type === 'original' ? 1.0 :
+
+    // DETECTAR CENSURA / EXPLICIT (Preferir explicit sobre clean)
+    // Usamos el título raw porque cleanTitle() ya eliminó estas etiquetas
+    const candTitleRawLower = (candidate.name || candidate.title || '').toLowerCase();
+
+    // Patrones seguros para detectar versiones (evita falsos positivos)
+    const cleanPattern = /[\(\[]\s*(clean|censored|edited)\s*[\]\)]|\bclean\s*version\b|\bcensored\s*version\b/i;
+    const explicitPattern = /[\(\[]\s*(explicit|uncensored|dirty)\s*[\]\)]|\bexplicit\s*version\b|\buncensored\s*version\b|\bparental\s*advisory\b/i;
+
+    const isClean = cleanPattern.test(candTitleRawLower) && !explicitPattern.test(candTitleRawLower);
+    const isExplicit = explicitPattern.test(candTitleRawLower);
+
+    let versionScore = version.type === 'original' ? 1.0 :
         version.type === 'remaster' ? 0.98 :
             version.type === 'remix' ? 0.90 : // Subido de 0.85
                 version.type === 'radio_edit' ? 0.95 : 0.9;
+
+    // AJUSTE POR PREFERENCIA DE USUARIO (Sin censura > Censurado)
+    if (isClean) {
+        // Penalizar fuertemente versiones censuradas para que pierdan contra la original/explicit
+        versionScore *= 0.6;
+    } else if (isExplicit) {
+        // Boost ligero para asegurar que gane contra versiones ambiguas (sin etiqueta)
+        // Ejemplo: "Song (Explicit)" gana a "Song" (que podría ser clean o explicit)
+        versionScore = Math.min(1.0, versionScore * 1.05);
+    }
     const durationScore = context.durationScore;
 
     // Pesos dinámicos (Ajustados para priorizar identidad)
