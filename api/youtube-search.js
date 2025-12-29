@@ -257,27 +257,48 @@ async function searchYouTube(query, limit = 10) {
     return await searchViaDDG(query, limit);
 }
 
-// Búsqueda combinada: Saavn primero, YouTube como fallback
+// Búsqueda combinada: PARALELA (Carrera de velocidad)
 async function searchApi(query, limit = 30) {
-    // 1. Intentar Saavn primero
-    const saavnResults = await searchSaavn(query, limit);
+    console.log(`[search] 🚀 Starting PARALLEL search for: "${query}"`);
 
-    if (saavnResults.length > 0) {
-        console.log(`[search] Saavn: ${saavnResults.length} results`);
-        return saavnResults;
+    // Wrappers que retornan null en lugar de array vacío para que Promise.any los descarte
+    const trySaavn = async () => {
+        try {
+            const res = await searchSaavn(query, limit);
+            if (res && res.length > 0) {
+                return { source: 'saavn', data: res };
+            }
+        } catch (e) {
+            // Ignorar error, dejar que la carrera continúe
+        }
+        throw new Error('Saavn empty'); // Forzar reject para Promise.any
+    };
+
+    const tryYoutube = async () => {
+        try {
+            // YouTube suele ser muy rápido, le damos chance en la carrera
+            const res = await searchYouTube(query, Math.min(limit, 15));
+            if (res && res.length > 0) {
+                return { source: 'youtube', data: res };
+            }
+        } catch (e) {
+            // Ignorar error
+        }
+        throw new Error('YouTube empty'); // Forzar reject
+    };
+
+    try {
+        // Promise.any resuelve con la PRIMERA promesa que tenga éxito (rejects son ignorados hasta que todos fallen)
+        const winner = await Promise.any([trySaavn(), tryYoutube()]);
+
+        console.log(`[search] 🏁 WINNER: ${winner.source} (returned ${winner.data.length} results)`);
+        return winner.data;
+
+    } catch (aggregateError) {
+        // Si llegamos aquí, AMBOS fallaron o devolvieron 0 resultados
+        console.log('[search] ❌ No results from any source (both empty/failed)');
+        return [];
     }
-
-    // 2. Fallback a YouTube si Saavn devuelve 0
-    console.log('[search] Saavn returned 0, trying YouTube...');
-    const ytResults = await searchYouTube(query, Math.min(limit, 15));
-
-    if (ytResults.length > 0) {
-        console.log(`[search] YouTube fallback: ${ytResults.length} results`);
-        return ytResults;
-    }
-
-    console.log('[search] No results from any source');
-    return [];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
