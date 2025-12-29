@@ -261,4 +261,40 @@ async function handler(req, res) {
     }
 }
 
+/**
+ * Lógica interna de prefetch para uso directo desde otros módulos (ej: youtube-search)
+ * Fire-and-forget: No retorna respuesta HTTP, solo loguea.
+ */
+export async function internalPrefetch(trackData) {
+    if (!trackData || !trackData.videoId) return;
+
+    try {
+        const { videoId, title, artist } = trackData;
+
+        // Confidence default alto si viene del buscador como "mejor resultado"
+        const confidence = trackData.confidence || 0.9;
+
+        // Verificar caché primero
+        const prefetchKey = buildPrefetchKey(videoId, confidence);
+        if (prefetchCache.has(prefetchKey)) {
+            // console.log(`[prefetch-internal] Already cached: ${videoId}`);
+            return;
+        }
+
+        // Obtener streams
+        //console.log(`[prefetch-internal] Warming up: "${title}"`);
+        const streams = await getStreams(videoId, confidence);
+
+        if (streams && streams.audioStreams.length > 0) {
+            prefetchCache.set(prefetchKey, {
+                timestamp: Date.now(),
+                result: streams
+            });
+            console.log(`[prefetch-internal] ✅ Warmed up: ${videoId} | ${streams.qualityInfo.selectedQuality}kbps`);
+        }
+    } catch (e) {
+        console.error(`[prefetch-internal] Failed for ${trackData?.videoId}:`, e.message);
+    }
+}
+
 export default allowCors(handler);

@@ -511,7 +511,7 @@ export async function executeSearch(query, params, limit = 10) {
 
     console.log(`[search] ${results.length} results | ${exactMatches} exact | ${goodMatches} good | ${rejected.length} rejected`);
 
-    return {
+    const responsePayload = {
         success: true,
         query,
         params,
@@ -537,6 +537,30 @@ export async function executeSearch(query, params, limit = 10) {
         })),
         rejectedSample: rejected.slice(0, 5)
     };
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 🚀 AUTO-PREFETCH (BACKGROUND)
+    // Disparamos la carga del audio para el Top 1 mientras respondemos al usuario
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (results.length > 0) {
+        const topResult = results[0];
+        // Solo pre-cargar si la confianza es decente
+        if (topResult.evaluation.scores.finalConfidence >= 0.7) {
+            // Import dinámico para evitar ciclos o cargas innecesarias
+            import('./prefetch.js').then(mod => {
+                if (mod.internalPrefetch) {
+                    mod.internalPrefetch({
+                        videoId: topResult.videoId,
+                        title: topResult.title,
+                        artist: topResult.artist,
+                        confidence: topResult.evaluation.scores.finalConfidence
+                    });
+                }
+            }).catch(err => console.error('[search-prefetch-trigger] error:', err.message));
+        }
+    }
+
+    return responsePayload;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
