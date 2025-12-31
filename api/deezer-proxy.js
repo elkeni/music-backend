@@ -7,7 +7,7 @@ const allowCors = (fn) => async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    
+
     if (req.method === 'OPTIONS') {
         res.status(200).end();
         return;
@@ -21,9 +21,9 @@ async function handler(req, res) {
     const { endpoint } = req.query;
 
     if (!endpoint) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Missing endpoint parameter. Example: ? endpoint=/chart/0/tracks' 
+        return res.status(400).json({
+            success: false,
+            error: 'Missing endpoint parameter. Example: ? endpoint=/chart/0/tracks'
         });
     }
 
@@ -34,7 +34,8 @@ async function handler(req, res) {
         console.log(`[deezer-proxy] Fetching: ${deezerUrl}`);
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        // TURBO: Timeout de 5s
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
 
         const response = await fetch(deezerUrl, {
             signal: controller.signal,
@@ -46,14 +47,14 @@ async function handler(req, res) {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-            return res.status(response.status).json({ 
-                success: false, 
-                error: `Deezer API error: ${response.status}` 
+            return res.status(response.status).json({
+                success: false,
+                error: `Deezer API error: ${response.status}`
             });
         }
 
         const data = await response.json();
-        
+
         // Devolver la respuesta de Deezer tal cual
         return res.status(200).json(data);
 

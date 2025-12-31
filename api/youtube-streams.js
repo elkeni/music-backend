@@ -224,7 +224,8 @@ async function handler(req, res) {
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            // TURBO: Timeout agresivo de 3s
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
 
             const response = await fetch(url, {
                 signal: controller.signal,

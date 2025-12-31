@@ -104,7 +104,8 @@ async function getStreams(videoId, confidence) {
         const url = `${SOURCE_API}/api/songs/${videoId}`;
 
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 8000);
+        // TURBO: Timeout de 4s para prefetch
+        const tid = setTimeout(() => ctrl.abort(), 4000);
 
         const res = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);

@@ -74,8 +74,8 @@ async function searchSaavn(query, limit = 30) {
     try {
         const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=${limit}`;
         const ctrl = new AbortController();
-        // OPTIMIZACIÓN MOVIL: Timeout reducido de 10s a 3.5s
-        const tid = setTimeout(() => ctrl.abort(), 3500);
+        // TURBO: Timeout agresivo de 2s
+        const tid = setTimeout(() => ctrl.abort(), 2000);
 
         const res = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
