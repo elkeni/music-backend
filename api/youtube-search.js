@@ -90,9 +90,7 @@ async function searchSaavn(query, limit = 30) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ESTRATEGIA DE BÚSQUEDA YOUTUBE: MULTI-LAYER FALLBACK
-// 1. YouTube-SR (Librería robusta) - Primera opción por calidad
-// 2. DuckDuckGo (Scraping) - Backup si falla youtube-sr o rate limits
+// BÚSQUEDA YOUTUBE: YouTube-SR (librería robusta)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Carga dinámica de youtube-sr para evitar bloat en cold start
@@ -138,123 +136,9 @@ async function searchViaLib(query, limit = 10) {
     }
 }
 
-// ESTRATEGIA 2: Scraping (DuckDuckGo) - Backup
-async function searchViaDDG(query, limit = 10) {
-    try {
-        console.log('[youtube-search] Strategy: DuckDuckGo scraping...');
-        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query + ' site:youtube.com')}`;
-
-        const ctrl = new AbortController();
-        // OPTIMIZACIÓN MOVIL: Timeout reducido de 8s a 4.5s
-        const tid = setTimeout(() => ctrl.abort(), 4500);
-
-        const res = await fetch(ddgUrl, {
-            signal: ctrl.signal,
-            headers: {
-                // User-Agent móvil genérico para obtener respuestas más ligeras
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Mobile Safari/537.36'
-            }
-        });
-        clearTimeout(tid);
-
-        if (!res.ok) {
-            console.log('[ddg] Request failed:', res.status);
-            return [];
-        }
-
-        const html = await res.text();
-
-        // Regex mejoradas y más permisivas
-        const ytPattern = /https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/g;
-
-        // Patrones de título: Intenta varios formatos conocidos de DDG
-        const titlePatterns = [
-            /<a[^>]*class="result__a"[^>]*>([^<]+)<\/a>/gi, // Clásico
-            /<a[^>]*class="[^"]*result__a[^"]*"[^>]*>([^<]+)<\/a>/gi, // Variaciones de clase
-            /<h2[^>]*><a[^>]*href="[^"]*youtube.com\/watch[^"]*"[^>]*>([^<]+)<\/a><\/h2>/gi // Estructura jerárquica
-        ];
-
-        const videoIds = [];
-        const seenIds = new Set();
-        let match;
-
-        // Extraer IDs
-        while ((match = ytPattern.exec(html)) !== null && videoIds.length < limit) {
-            if (!seenIds.has(match[1])) {
-                videoIds.push(match[1]);
-                seenIds.add(match[1]);
-            }
-        }
-
-        if (videoIds.length === 0) {
-            // Último intento: buscar hrefs crudos en el HTML si el regex limpio falla
-            const rawHrefPattern = /href="[^"]*watch\?v=([a-zA-Z0-9_-]{11})"/g;
-            while ((match = rawHrefPattern.exec(html)) !== null && videoIds.length < limit) {
-                if (!seenIds.has(match[1])) {
-                    videoIds.push(match[1]);
-                    seenIds.add(match[1]);
-                }
-            }
-        }
-
-        // Extraer títulos
-        const titles = [];
-        let titleMatchFound = false;
-
-        for (const pattern of titlePatterns) {
-            // Reiniciar regex para intentar desde el principio
-            pattern.lastIndex = 0;
-            let tempTitles = [];
-            while ((match = pattern.exec(html)) !== null) {
-                const title = match[1].replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
-                if (title) tempTitles.push(title);
-            }
-            if (tempTitles.length > 0) {
-                titles.push(...tempTitles);
-                titleMatchFound = true;
-                break; // Usar el primer patrón que funcione
-            }
-        }
-
-        if (videoIds.length === 0) {
-            console.log('[ddg] No videos found via scraping.');
-            return [];
-        }
-
-        if (!titleMatchFound) {
-            console.warn('[ddg] ⚠️ IDs found but patterns for Title failed. DDG HTML structure changed.');
-        }
-
-        // Construir objetos
-        return videoIds.slice(0, limit).map((id, i) => ({
-            id: id,
-            name: titles[i] || query, // Fallback al query si no hay título
-            title: titles[i] || query,
-            artist: '',
-            primaryArtists: '',
-            duration: 0,
-            image: [{ url: `https://img.youtube.com/vi/${id}/mqdefault.jpg`, quality: '500x500' }],
-            source: 'youtube',
-            _proxy: 'duckduckgo'
-        }));
-
-    } catch (e) {
-        console.log('[ddg] Scraping error:', e.message);
-        return [];
-    }
-}
-
-// ORCHESTRATOR: Intenta biblioteca -> luego scraping
+// Búsqueda YouTube usando solo youtube-sr
 async function searchYouTube(query, limit = 10) {
-    // 1. Intentar librería (más confiable para metadata)
-    const libResults = await searchViaLib(query, limit);
-    if (libResults.length > 0) {
-        return libResults;
-    }
-
-    // 2. Fallback a scraping (si librería falla o rate limits)
-    console.log('[youtube-search] Lib failed/empty, falling back to DDG scraping...');
-    return await searchViaDDG(query, limit);
+    return await searchViaLib(query, limit);
 }
 
 // Búsqueda combinada: PARALELA (Carrera de velocidad)
@@ -455,55 +339,7 @@ export async function executeSearch(query, params, limit = 10) {
         }
     }
 
-    // FALLBACK NIVEL 2: YouTube directo si todo fue rechazado
-    if (results.length === 0 && rejected.length > 0) {
-        console.log('[search] All Saavn results rejected, trying YouTube directly...');
 
-        // Buscar en YouTube directamente
-        const ytResults = await searchYouTube(effectiveQuery, 10);
-
-        if (ytResults.length > 0) {
-            console.log(`[search] YouTube backup found ${ytResults.length} candidates`);
-
-            // Evaluar candidatos de YouTube
-            for (const item of ytResults.slice(0, 5)) {
-                let evaluation;
-
-                if (ext) {
-                    evaluation = ext.evaluateCandidate(item, params);
-                } else {
-                    evaluation = {
-                        passed: true,
-                        rejected: false,
-                        rejectReason: null,
-                        scores: { identityScore: 0.5, versionScore: 1.0, durationScore: 1.0, albumScore: 0.5, finalConfidence: 0.5 },
-                        version: { type: 'unknown', detail: null, isForbidden: false },
-                        feats: []
-                    };
-                }
-
-                if (evaluation.passed) {
-                    const artistName = ext ? ext.extractArtistInfo(item).full : (item.artist || item.primaryArtists || '');
-
-                    results.push({
-                        title: item.name || item.title || '',
-                        artist: artistName,
-                        album: item.album?.name || item.album || null,
-                        duration: item.duration || 0,
-                        year: null,
-                        videoId: item.id,
-                        thumbnail: item.image?.[0]?.url || '',
-                        source: 'youtube',
-                        evaluation
-                    });
-                }
-            }
-
-            if (results.length > 0) {
-                console.log(`[search] YouTube backup: ${results.length} passed evaluation`);
-            }
-        }
-    }
 
     // Stats
     const exactMatches = results.filter(r => r.evaluation.scores.finalConfidence >= 0.85).length;

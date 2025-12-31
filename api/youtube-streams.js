@@ -216,18 +216,14 @@ async function handler(req, res) {
             });
         }
 
-        // Llamar a la API fuente
-        // Llamar a la API fuente
+        // Llamar a la API fuente (Saavn)
         const url = `${SOURCE_API}/api/songs/${videoId}`;
         console.log(`[youtube-streams] Calling: ${url}`);
 
         let rawStreams = [];
-        let externalSourceFailed = false;
 
-        // 1. INTENTO PRIMARIO: API EXTERNA (Saavn/Unified)
         try {
             const controller = new AbortController();
-            // Reducimos timeout a 5s para saltar al fallback local más rápido si la red está lenta
             const timeoutId = setTimeout(() => controller.abort(), 5000);
 
             const response = await fetch(url, {
@@ -248,54 +244,18 @@ async function handler(req, res) {
                     })).filter(s => s.url);
                 }
             } else {
-                console.warn(`[youtube-streams] ⚠️ External API error: ${response.status}`);
-                externalSourceFailed = true;
+                console.warn(`[youtube-streams] ⚠️ API error: ${response.status}`);
             }
         } catch (err) {
-            console.warn(`[youtube-streams] ⚠️ External API unavailable: ${err.message}`);
-            externalSourceFailed = true;
-        }
-
-        // 2. FALLBACK SECUNDARIO: LOCAL PLAY-DL (Rescue Mode)
-        // Si la API externa falló o devolvió 0 streams, usamos play-dl localmente
-        if (rawStreams.length === 0) {
-            console.log(`[youtube-streams] 🚑 Activating LOCAL RESCUE (play-dl) for videoId: ${videoId}`);
-
-            try {
-                // Import dinámico para no cargar la librería si no es necesaria
-                const play = await import('play-dl');
-                const pdl = play.default || play;
-
-                const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
-
-                // Pedimos stream de calidad
-                const streamInfo = await pdl.stream(ytUrl, {
-                    quality: 2, // 2 = High quality default intent
-                    discordPlayerCompatibility: false
-                });
-
-                if (streamInfo && streamInfo.url) {
-                    rawStreams.push({
-                        url: streamInfo.url,
-                        quality: '128kbps', // play-dl suele dar webm/opus de buena calidad (~128-160k)
-                        format: 'webm',
-                        source: 'play-dl-local'
-                    });
-                    console.log('[youtube-streams] ✅ Local rescue successful!');
-                }
-            } catch (localErr) {
-                console.error('[youtube-streams] ❌ Local rescue failed:', localErr.message);
-            }
+            console.warn(`[youtube-streams] ⚠️ API unavailable: ${err.message}`);
         }
 
         if (rawStreams.length === 0) {
             return res.status(404).json({
                 success: false,
-                error: 'No audio streams available (both external and local failed)'
+                error: 'No audio streams available'
             });
         }
-
-
 
         // ⭐ NUEVO: Seleccionar streams según política de calidad
         // Si saveData es true, forzamos política 'mobile_saver' (max 128kbps, preferible 96kbps)
