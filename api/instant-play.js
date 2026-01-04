@@ -111,9 +111,57 @@ async function quickSearch(artist, track) {
             }
         }
 
-        // FALLBACK: Si ninguno pasó el filtro estricto, usar el primero (mejor malo conocido que error)
-        // Esto mantiene la naturaleza "Instantánea" y resiliente del endpoint
-        const best = bestCandidate || results[0];
+        // FALLBACK INTELIGENTE:
+        // Si ninguno pasó el filtro estricto (Score > 0.85), buscamos CUALQUIERA que al menos coincida en Artista.
+        // Motivo: Preferimos un título ligeramente diferente (Live/Demo) del ARTISTA CORRECTO 
+        // antes que una canción perfecta de un ARTISTA INCORRECTO (Cover).
+
+        if (!bestCandidate) {
+            console.log('[instant-play] ⚠️ Strict match failed. Trying artist-only match...');
+
+            // Buscar coincidencia de artista "decente" (Score > 0.8)
+            const artistOnlyMatch = results.find(item => {
+                // Normalizar Item
+                const candidate = {
+                    name: item.name || item.title,
+                    artist: item.artist || item.primaryArtists || '',
+                    artists: item.artists || [],
+                    album: item.album?.name || item.album
+                };
+
+                // Evaluar solo identidad de artista usando el extractor
+                // (Usamos evaluateCandidate completo pero miramos scores internos)
+                const evalResult = evaluateCandidate(candidate, targetParams);
+                const scores = evalResult.scores || {};
+                const details = evalResult.details?.identity || {};
+
+                // Criterio de rescate:
+                // 1. El Artista debe coincidir bien (>= 0.8)
+                // 2. No debe ser prohibido (verificado por evaluateCandidate -> passed/rejected)
+                // 3. El título no debe ser atroz (>= 0.4)
+
+                // NOTA: Si evaluateCandidate dice 'rejected' por version prohibida, NO usar.
+                if (evalResult.rejected) return false;
+
+                // Verificamos match de artista manual si es necesario, o confiamos en el score
+                return (details.artistScore >= 0.8 && details.titleScore >= 0.3);
+            });
+
+            if (artistOnlyMatch) {
+                console.log(`[instant-play] ✅ Salvaged by Artist Match: "${artistOnlyMatch.name}"`);
+                bestCandidate = artistOnlyMatch;
+            }
+        }
+
+        // ÚLTIMA LÍNEA DE DEFENSA:
+        // Si aun así no tenemos candidato, SIGNIFICA QUE NO HAY NADA DEL ARTISTA.
+        // Devolvemos NULL para que el frontend no reproduzca basura.
+        if (!bestCandidate) {
+            console.log('[instant-play] ❌ No valid match found (Artist specific). Aborting.');
+            return null;
+        }
+
+        const best = bestCandidate;
 
         // Extraer artista limpio usando el extractor
         const artistInfo = extractArtistInfo({
