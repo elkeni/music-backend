@@ -18,9 +18,13 @@
  *   track: { title, artist, thumbnail, videoId }
  * }
  * 
+ * 
  * VENTAJA: Una sola llamada HTTP en lugar de dos secuenciales
+ * ACTUALIZADO: Integra validación estricta para evitar versiones "Live" involuntarias
  * ═══════════════════════════════════════════════════════════════════════════════
  */
+
+import { evaluateCandidate, extractArtistInfo } from '../src/music/extraction/youtube-extractor.js';
 
 export const config = { runtime: 'nodejs' };
 
@@ -60,12 +64,67 @@ async function quickSearch(artist, track) {
 
         if (results.length === 0) return null;
 
-        // Tomar el primer resultado (ya viene ordenado por relevancia)
-        const best = results[0];
+        // ═══════════════════════════════════════════════════════════════════════════
+        // SELECCIÓN INTELIGENTE (FILTRO ESTRICTO)
+        // No tomar ciegamente el primero, buscar el mejor match "Oficial"
+        // ═══════════════════════════════════════════════════════════════════════════
+
+        let bestCandidate = null;
+        let bestScore = -1;
+
+        const targetParams = {
+            targetTitle: track,
+            targetArtist: artist,
+            targetDuration: 0, // No tenemos duración en instant play usualmente
+            targetAlbum: ''
+        };
+
+        // Escanear los candidatos (máximo 5) en busca del mejor match
+        for (const item of results) {
+            // Normalizar formato de item si viene de Saavn para que el extractor lo entienda
+            const candidate = {
+                name: item.name || item.title,
+                title: item.name || item.title,
+                artist: item.artist || item.primaryArtists || '',
+                artists: item.artists || [],
+                duration: item.duration || 0,
+                year: item.year || item.releaseDate,
+                album: item.album?.name || item.album
+            };
+
+            const evaluation = evaluateCandidate(candidate, targetParams);
+
+            // Prioridad absoluta: Si pasa el filtro estricto (Score > 0.85 o Identity > 0.9)
+            if (evaluation.passed) {
+                // Si encontramos uno que pasa "de verdad", nos quedamos con ese y cortamos
+                // (Optimización de velocidad: el primero "bueno" gana)
+                if (evaluation.scores.finalConfidence >= 0.85) {
+                    bestCandidate = item;
+                    break;
+                }
+
+                // Si pasa pero raspando, guardamos por si hay uno mejor
+                if (evaluation.scores.finalConfidence > bestScore) {
+                    bestScore = evaluation.scores.finalConfidence;
+                    bestCandidate = item;
+                }
+            }
+        }
+
+        // FALLBACK: Si ninguno pasó el filtro estricto, usar el primero (mejor malo conocido que error)
+        // Esto mantiene la naturaleza "Instantánea" y resiliente del endpoint
+        const best = bestCandidate || results[0];
+
+        // Extraer artista limpio usando el extractor
+        const artistInfo = extractArtistInfo({
+            primaryArtists: best.primaryArtists || best.artist || '',
+            artists: best.artists
+        });
+
         return {
             videoId: best.id,
             title: best.name || best.title || track,
-            artist: best.primaryArtists || best.artist || artist,
+            artist: artistInfo.full || artist, // Usar nombre limpio
             thumbnail: best.image?.find(i => i.quality === '500x500')?.url || best.image?.[0]?.url || ''
         };
     } catch (e) {
