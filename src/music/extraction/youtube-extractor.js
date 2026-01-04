@@ -411,30 +411,48 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     }
     const targetTitleMainNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitleMainRaw)));
 
+    // FUNCIÓN DE SIMILITUD ESTRICTA (0 - 1.0)
+    const calculateStrictScore = (cand, target) => {
+        if (!cand || !target) return 0;
+        if (cand === target) return 1.0;
+
+        // Si uno contiene al otro, penalizar por longitud extra (basura / palabras extra)
+        // Ejemplo: Target="Hello" (5), Cand="Hello Live" (10) -> Score 0.5
+        if (cand.includes(target)) {
+            return target.length / cand.length;
+        }
+        if (target.includes(cand)) {
+            return cand.length / target.length;
+        }
+
+        // Palabras compartidas (Jaccard simple ponderado)
+        const candWords = cand.split(' ').filter(w => w.length > 1);
+        const targetWords = target.split(' ').filter(w => w.length > 1);
+        if (targetWords.length === 0 || candWords.length === 0) return 0;
+
+        const intersection = targetWords.filter(w => candWords.includes(w));
+        // Penalizar fuertemente si hay menos palabras o más palabras de las necesarias
+        const union = new Set([...candWords, ...targetWords]).size;
+
+        return intersection.length / union;
+    };
+
     // Usaremos la lógica de matching para ambos y nos quedamos con el mejor resultado
     const evaluateTitleAgainst = (targetNorm) => {
         if (!targetNorm) return { score: 0, match: 'none' };
 
-        const targetWords = targetNorm.split(' ').filter(w => w.length > 2);
-        const candWords = candTitle.split(' ');
+        const score = calculateStrictScore(candTitle, targetNorm);
 
-        if (candTitle === targetNorm) {
-            return { score: 1.0, match: 'exact' };
-        } else if (candTitle.includes(targetNorm) || targetNorm.includes(candTitle)) {
-            return { score: 0.95, match: 'contains' };
-        } else if (
-            targetWords.length === 1 &&
-            targetWords[0].length >= 3 &&
-            candTitle.includes(targetWords[0])
-        ) {
-            return { score: 0.95, match: 'single_word_exact' };
-        } else if (targetWords.length > 0) {
-            const matched = targetWords.filter(w => candWords.some(cw => cw.includes(w) || w.includes(cw)));
-            const ratio = matched.length / targetWords.length;
-            const matchType = ratio >= 0.65 ? 'partial_high' : ratio >= 0.35 ? 'partial_low' : 'none';
-            return { score: ratio, match: matchType };
-        }
-        return { score: 0, match: 'none' };
+        let matchType = 'none';
+        if (score === 1.0) matchType = 'exact';
+        else if (score >= 0.95) matchType = 'near_exact'; // Cumple criterio 95%
+        else if (score >= 0.8) matchType = 'high_similarity';
+        else if (score >= 0.5) matchType = 'partial';
+
+        // Logica legacy de palabras clave para fallback (solo si score es bajo pero tiene palabras clave)
+        // Por ahora confiamos en el score estricto
+
+        return { score, match: matchType };
     };
 
     // Calcular scores
@@ -468,11 +486,20 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
         if (candArtist === targetArtistNorm) {
             result.artistScore = 1.0;
             result.artistMatch = 'exact';
-        } else if (candArtist.includes(targetArtistNorm) || targetArtistNorm.includes(candArtist)) {
-            result.artistScore = 0.95;
+        } else if (candArtist.includes(targetArtistNorm)) {
+            // Penalizar longitud extra en artista tambien
+            // Ej: Target="Artist", Cand="Artist Vevo" -> Score alto
+            // Ej: Target="Artist", Cand="Artist & Other" -> Score medio
+            // Ej: Target="Artist", Cand="Artist Tribute Band" -> Score bajo (manejado arriba, pero aqui tambien por ratio)
+            const ratio = targetArtistNorm.length / candArtist.length;
+            result.artistScore = ratio >= 0.9 ? 0.95 : ratio;
             result.artistMatch = 'contains';
+        } else if (targetArtistNorm.includes(candArtist)) {
+            const ratio = candArtist.length / targetArtistNorm.length;
+            result.artistScore = ratio >= 0.9 ? 0.95 : ratio;
+            result.artistMatch = 'contains_reverse';
         } else if (allArtists.some(a => a.includes(targetArtistNorm) || targetArtistNorm.includes(a))) {
-            result.artistScore = 0.85;
+            result.artistScore = 0.90; // Colaborador directo encontrado
             result.artistMatch = 'collaborator';
         } else {
             const targetWords = targetArtistNorm.split(' ').filter(w => w.length > 2);
@@ -526,12 +553,12 @@ export function evaluateMusicalContext(candidate, targetDuration, targetAlbum) {
         const diff = Math.abs(candDuration - targetDur);
         result.durationDiff = diff;
 
-        // Tolerancia aumentada para duración
-        if (diff <= 8) result.durationScore = 1.0; // Era 5
-        else if (diff <= 20) result.durationScore = 0.9; // Era 15
-        else if (diff <= 40) result.durationScore = 0.75; // Era 30
-        else if (diff <= 70) result.durationScore = 0.5; // Era 60
-        else result.durationScore = 0.3;
+        // Tolerancia STRICTA para duración (Petición de precisión)
+        if (diff <= 5) result.durationScore = 1.0; // Exacto (5s margen)
+        else if (diff <= 15) result.durationScore = 0.85;
+        else if (diff <= 30) result.durationScore = 0.60;
+        else if (diff <= 60) result.durationScore = 0.30;
+        else result.durationScore = 0.1;
     }
 
     // Rechazar videos muy largos
@@ -674,25 +701,26 @@ export function evaluateCandidate(candidate, params) {
     }
     const durationScore = context.durationScore;
 
-    // Pesos dinámicos (Ajustados para priorizar identidad)
+    // Pesos dinámicos (MODO ESTRICTO: Identidad es Rey)
     const hasTargetAlbum = !!(targetAlbum && targetAlbum.trim());
     const hasTargetDuration = targetDuration > 0;
 
     const weights = {
-        identity: 0.60, // Subido de 0.55
-        version: 0.15,
-        duration: hasTargetDuration ? 0.20 : 0.05, // Bajado levemente para tolerar diferencias
-        album: hasTargetAlbum ? 0.05 : 0.00
+        identity: 0.80, // SUBIDO al 80% (Usuario pide 95% coincidencia visual "Frontend")
+        version: 0.10,
+        duration: hasTargetDuration ? 0.10 : 0.05,
+        album: hasTargetAlbum ? 0.05 : 0.0
     };
 
-    const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0);
+    // Normalizar pesos
+    const currentTotal = weights.identity + weights.version + weights.duration + weights.album;
 
     const finalConfidence = (
         (identityScore * weights.identity) +
         (versionScore * weights.version) +
         (durationScore * weights.duration) +
         (context.albumScore * weights.album)
-    ) / totalWeight;
+    ) / currentTotal;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // 🔐 FASE A: HARD TITLE CONSTRAINT (HTC) - RELAJADO
@@ -738,7 +766,17 @@ export function evaluateCandidate(candidate, params) {
 
     let passed;
     if (hasTargetTitle) {
-        passed = identity.artistScore >= 0.35; // Bajado de 0.4 para permitir errores tipográficos leves
+        // MODO ESTRICTO: 
+        // 1. Debe superar el umbral de identidad del 90% (para ser "95% visual coincidence")
+        // 2. O tener un score combinado muy alto
+        // 3. El artista debe ser casi exacto
+        passed = (identityScore >= 0.85 && durationScore >= 0.6) ||
+            (identityScore >= 0.95);
+
+        // REGLA DE ORO DE 95%: Si el usuario pide X, y tenemos X (titleScore 1.0, artistScore 1.0), pasa seguro.
+        if (identity.titleScore >= 0.95 && identity.artistScore >= 0.90) {
+            passed = true;
+        }
     } else {
         passed = identity.passed ||
             identityScore >= 0.35 ||
