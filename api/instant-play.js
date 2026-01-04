@@ -159,15 +159,15 @@ async function getAudioStream(videoId) {
 
         if (!songData?.downloadUrl || !Array.isArray(songData.downloadUrl)) return null;
 
-        // Ordenar por calidad (mayor primero) y tomar la mejor
+        // Ordenar por velocidad (96kbps preferible para instant play)
         const streams = songData.downloadUrl
             .map(s => ({
                 url: s.url,
                 quality: s.quality || 'unknown',
                 kbps: parseInt(String(s.quality).match(/(\d+)/)?.[1] || '0', 10)
             }))
-            .filter(s => s.url && s.kbps >= 96)
-            .sort((a, b) => b.kbps - a.kbps);
+            .filter(s => s.url && s.kbps >= 96) // Mínimo aceptable
+            .sort((a, b) => a.kbps - b.kbps); // Ascendente: 96 -> 160 -> 320
 
         if (streams.length === 0) return null;
 
