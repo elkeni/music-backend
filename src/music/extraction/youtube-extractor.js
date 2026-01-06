@@ -721,15 +721,15 @@ export function evaluateCandidate(candidate, params) {
     }
     const durationScore = context.durationScore;
 
-    // Pesos dinámicos (MODO ESTRICTO: Identidad es Rey)
+    // Pesos dinámicos (MODO ESTRICTO 2.0: Identidad es ABSOLUTA)
     const hasTargetAlbum = !!(targetAlbum && targetAlbum.trim());
     const hasTargetDuration = targetDuration > 0;
 
     const weights = {
-        identity: 0.80, // SUBIDO al 80% (Usuario pide 95% coincidencia visual "Frontend")
-        version: 0.10,
-        duration: hasTargetDuration ? 0.10 : 0.05,
-        album: hasTargetAlbum ? 0.05 : 0.0
+        identity: 0.90, // SUBIDO al 90% (Usuario pide 95-100% de match)
+        version: 0.05,
+        duration: hasTargetDuration ? 0.05 : 0.05,
+        album: hasTargetAlbum ? 0.0 : 0.0 // Album es irrelevante si la identidad no es perfecta
     };
 
     // Normalizar pesos
@@ -743,29 +743,25 @@ export function evaluateCandidate(candidate, params) {
     ) / currentTotal;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 🔐 FASE A: HARD TITLE CONSTRAINT (HTC) - RELAJADO
+    // 🔐 FASE A: HARD TITLE CONSTRAINT (HTC) - ULTRA ESTRICTO
     // ═══════════════════════════════════════════════════════════════════════════
 
     const hasTargetTitle = !!(targetTitle && targetTitle.trim());
 
     if (hasTargetTitle) {
+        // Solo aceptamos matches EXACTOS o MUY CERCANOS
         const isDefinitelyCorrect =
             identity.titleMatch === 'exact' ||
-            identity.titleMatch === 'contains' ||
-            identity.titleMatch === 'single_word_exact' ||
-            identity.titleScore >= 0.90; // Bajado de 0.95
+            identity.titleMatch === 'near_exact' ||
+            identity.titleScore >= 0.94; // 95% aprox
 
-        const isConditionallyCorrect =
-            (identity.titleMatch === 'partial_high' && identity.artistScore >= 0.7) || // Bajado artistReq
-            (identity.titleMatch === 'partial_low' && identity.artistScore >= 0.85 && context.durationScore >= 0.8);
+        // NO ACEPTAMOS isConditionallyCorrect (matches parciales se rechazan)
 
-        const titleIsExactEnough = isDefinitelyCorrect || isConditionallyCorrect;
-
-        if (!titleIsExactEnough) {
+        if (!isDefinitelyCorrect) {
             return {
                 passed: false,
                 rejected: true,
-                rejectReason: 'title_not_matching_target',
+                rejectReason: 'title_not_matching_strict_95_percent',
                 scores: {
                     identityScore: Math.round(identityScore * 100) / 100,
                     versionScore: Math.round(versionScore * 100) / 100,
@@ -786,17 +782,10 @@ export function evaluateCandidate(candidate, params) {
 
     let passed;
     if (hasTargetTitle) {
-        // MODO ESTRICTO: 
-        // 1. Debe superar el umbral de identidad del 90% (para ser "95% visual coincidence")
-        // 2. O tener un score combinado muy alto
-        // 3. El artista debe ser casi exacto
-        passed = (identityScore >= 0.85 && durationScore >= 0.6) ||
-            (identityScore >= 0.95);
-
-        // REGLA DE ORO DE 95%: Si el usuario pide X, y tenemos X (titleScore 1.0, artistScore 1.0), pasa seguro.
-        if (identity.titleScore >= 0.95 && identity.artistScore >= 0.90) {
-            passed = true;
-        }
+        // MODO ULTRA ESTRICTO: 
+        // 1. Identity Score debe ser >= 0.95
+        // 2. Y el score de artista debe ser también muy alto (>= 0.9)
+        passed = (identityScore >= 0.94 && identity.artistScore >= 0.90);
     } else {
         passed = identity.passed ||
             identityScore >= 0.35 ||

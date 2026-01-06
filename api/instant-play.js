@@ -48,11 +48,12 @@ const allowCors = (fn) => async (req, res) => {
 
 async function quickSearch(artist, track) {
     const query = `${artist} ${track}`.trim();
-    const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=5`;
+    // EXTENSIVE SEARCH: Aumentamos el límite a 10 resultados para tener más opciones de encontrar el match perfecto
+    const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=10`;
 
     const ctrl = new AbortController();
-    // TURBO: Solo 1.5s para búsqueda
-    const tid = setTimeout(() => ctrl.abort(), 1500);
+    // 2.5s para permitir búsqueda más amplia
+    const tid = setTimeout(() => ctrl.abort(), 2500);
 
     try {
         const res = await fetch(url, { signal: ctrl.signal });
@@ -65,8 +66,7 @@ async function quickSearch(artist, track) {
         if (results.length === 0) return null;
 
         // ═══════════════════════════════════════════════════════════════════════════
-        // SELECCIÓN INTELIGENTE (FILTRO ESTRICTO)
-        // No tomar ciegamente el primero, buscar el mejor match "Oficial"
+        // SELECCIÓN INTELIGENTE 2.0 (MODO ULTRA ESTRICTO)
         // ═══════════════════════════════════════════════════════════════════════════
 
         let bestCandidate = null;
@@ -75,13 +75,13 @@ async function quickSearch(artist, track) {
         const targetParams = {
             targetTitle: track,
             targetArtist: artist,
-            targetDuration: 0, // No tenemos duración en instant play usualmente
+            targetDuration: 0,
             targetAlbum: ''
         };
 
-        // Escanear los candidatos (máximo 5) en busca del mejor match
+        // Escanear los candidatos
         for (const item of results) {
-            // Normalizar formato de item si viene de Saavn para que el extractor lo entienda
+            // Normalizar formato
             const candidate = {
                 name: item.name || item.title,
                 title: item.name || item.title,
@@ -94,16 +94,13 @@ async function quickSearch(artist, track) {
 
             const evaluation = evaluateCandidate(candidate, targetParams);
 
-            // Prioridad absoluta: Si pasa el filtro estricto (Score > 0.85 o Identity > 0.9)
             if (evaluation.passed) {
-                // Si encontramos uno que pasa "de verdad", nos quedamos con ese y cortamos
-                // (Optimización de velocidad: el primero "bueno" gana)
-                if (evaluation.scores.finalConfidence >= 0.85) {
+                // Si encontramos uno perfecto (>= 0.95), lo tomamos YA.
+                if (evaluation.scores.finalConfidence >= 0.95) {
                     bestCandidate = item;
                     break;
                 }
 
-                // Si pasa pero raspando, guardamos por si hay uno mejor
                 if (evaluation.scores.finalConfidence > bestScore) {
                     bestScore = evaluation.scores.finalConfidence;
                     bestCandidate = item;
@@ -111,47 +108,9 @@ async function quickSearch(artist, track) {
             }
         }
 
-        // FALLBACK INTELIGENTE:
-        // Si ninguno pasó el filtro estricto (Score > 0.85), buscamos CUALQUIERA que al menos coincida en Artista.
-        // Motivo: Preferimos un título ligeramente diferente (Live/Demo) del ARTISTA CORRECTO 
-        // antes que una canción perfecta de un ARTISTA INCORRECTO (Cover).
-
-        if (!bestCandidate) {
-            console.log('[instant-play] ⚠️ Strict match failed. Trying artist-only match...');
-
-            // Buscar coincidencia de artista "decente" (Score > 0.8)
-            const artistOnlyMatch = results.find(item => {
-                // Normalizar Item
-                const candidate = {
-                    name: item.name || item.title,
-                    artist: item.artist || item.primaryArtists || '',
-                    artists: item.artists || [],
-                    album: item.album?.name || item.album
-                };
-
-                // Evaluar solo identidad de artista usando el extractor
-                // (Usamos evaluateCandidate completo pero miramos scores internos)
-                const evalResult = evaluateCandidate(candidate, targetParams);
-                const scores = evalResult.scores || {};
-                const details = evalResult.details?.identity || {};
-
-                // Criterio de rescate:
-                // 1. El Artista debe coincidir bien (>= 0.8)
-                // 2. No debe ser prohibido (verificado por evaluateCandidate -> passed/rejected)
-                // 3. El título no debe ser atroz (>= 0.4)
-
-                // NOTA: Si evaluateCandidate dice 'rejected' por version prohibida, NO usar.
-                if (evalResult.rejected) return false;
-
-                // Verificamos match de artista manual si es necesario, o confiamos en el score
-                return (details.artistScore >= 0.8 && details.titleScore >= 0.3);
-            });
-
-            if (artistOnlyMatch) {
-                console.log(`[instant-play] ✅ Salvaged by Artist Match: "${artistOnlyMatch.name}"`);
-                bestCandidate = artistOnlyMatch;
-            }
-        }
+        // SIN FALLBACKS SUCIOS:
+        // Si no pasa el filtro estricto de evaluateCandidate (que ahora exige ~95%),
+        // devolvemos null. Preferimos silencio a ruido.
 
         // ÚLTIMA LÍNEA DE DEFENSA:
         // Si aun así no tenemos candidato, SIGNIFICA QUE NO HAY NADA DEL ARTISTA.
