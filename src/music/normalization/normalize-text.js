@@ -112,7 +112,12 @@ export function normalizeArtist(input) {
     // Fred again.. → fred again..
     // CA7RIEL → ca7riel
     // Joey Bada$$ → joey bada$$ (si permitimos $) -> Vamos a permitir $ también
-    result = result.replace(/[^a-z0-9.\-\@\&\$\!\s]/g, ' ');
+    // 5. Eliminar símbolos EXCEPTO puntos (.), guiones (-), @, $
+    // Fred again.. → fred again..
+    // CA7RIEL → ca7riel
+    // Joey Bada$$ → joey bada$$
+    // A&B -> a b (para mejor matching cuando el separador falla)
+    result = result.replace(/[^a-z0-9.\-\@\$\!\s]/g, ' ');
 
     // 6. Colapsar múltiples espacios
     result = result.replace(/\s+/g, ' ');

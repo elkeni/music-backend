@@ -396,8 +396,21 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     // ═══════════════════════════════════════════════════════════════════════════
     // Aplicamos cleanTitle + cleanSpanishTitle local
     const rawCandTitle = candidate.name || candidate.title || '';
-    const candTitle = normalizeText(cleanSpanishTitle(cleanTitle(rawCandTitle)));
+    let candTitle = normalizeText(cleanSpanishTitle(cleanTitle(rawCandTitle)));
     const candArtist = normalizeArtist(extractArtistInfo(candidate).primary);
+
+    // FIX: Eliminar el artista del título si aparece al inicio (común en YouTube)
+    // Usamos normalizeText standard (sin puntuación) para coincidir con candTitle
+    if (targetArtist) {
+        const artistSimple = normalizeText(targetArtist);
+        if (artistSimple.length > 0 && candTitle.startsWith(artistSimple)) {
+            const remainder = candTitle.replace(artistSimple, '').trim();
+            // Solo reemplazar si queda algo sustancial (evitar vaciar títulos homónimos)
+            if (remainder.length > 0) {
+                candTitle = remainder;
+            }
+        }
+    }
 
     // normalizar target completo
     const targetTitleFullNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitle || '')));
@@ -482,10 +495,17 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     if (targetArtistNorm) {
         const artistInfo = extractArtistInfo(candidate);
         const allArtists = [artistInfo.primary, ...artistInfo.collaborators].map(a => normalizeText(a));
+        const candArtistFull = normalizeArtist(artistInfo.full);
 
         if (candArtist === targetArtistNorm) {
             result.artistScore = 1.0;
             result.artistMatch = 'exact';
+        } else if (candArtistFull === targetArtistNorm) {
+            // MATCH EXACTO DEL NOMBRE COMPLETO (Recuperación de splits incorrectos)
+            // Ej: "Tyler, The Creator" -> Split ["Tyler", "The Creator"]
+            // candArtist="tyler", candArtistFull="tyler the creator" == target="tyler the creator"
+            result.artistScore = 1.0;
+            result.artistMatch = 'exact_full';
         } else if (candArtist.includes(targetArtistNorm)) {
             // Penalizar longitud extra en artista tambien
             // Ej: Target="Artist", Cand="Artist Vevo" -> Score alto
