@@ -73,8 +73,6 @@ export { cleanTitle } from './normalization/clean-title.js';
 export {
     // Detección de versiones
     detectVersion,
-    detectForbiddenVersion,
-    detectValidVersion,
     FORBIDDEN_VERSIONS,
     ALLOWED_VERSIONS,
     // Contenido basura

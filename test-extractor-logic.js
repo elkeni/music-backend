@@ -2,64 +2,71 @@
 import { evaluateCandidate } from './src/music/extraction/youtube-extractor.js';
 
 const testCases = [
+    // CASO 1: Grupo 5 - Motor y Motivo (Clásico de Cumbia)
+    // Desafío: Metadata de YouTube a menudo tiene "Video Oficial" o "En Vivo" (aunque sea la única versión popular)
     {
-        desc: "EXACT: Fred again.. x CA7RIEL x Paco Amoroso - Beto's Horns",
+        desc: "Grupo 5 - Motor y Motivo (Video Oficial)",
         params: {
-            targetArtist: "Fred again..",
-            targetTitle: "Beto's Horns",
+            targetArtist: "Grupo 5",
+            targetTitle: "Motor y Motivo",
         },
         candidate: {
-            name: "Fred again.. x CA7RIEL x Paco Amoroso - Beto's Horns",
-            artist: "Fred again..",
-            duration: 180
+            name: "Grupo 5 - Motor y Motivo (Video Oficial)",
+            artist: "Grupo 5",
+            duration: 245
         }
     },
+    // CASO 2: Agua Marina (Complejo: Título largo con ubicación común en Perú)
     {
-        desc: "REMIX: Fred again.. - Beto's Horns (fred remix) [Should PASS with base identity]",
+        desc: "Agua Marina - Tu Traición (En Vivo) [Should PASS with Peru Exception]",
         params: {
-            targetArtist: "Fred again..",
-            targetTitle: "Beto's Horns",
+            targetArtist: "Agua Marina",
+            targetTitle: "Tu Traición",
         },
         candidate: {
-            name: "Fred again.. x CA7RIEL x Paco Amoroso - Beto's Horns (fred remix)",
-            artist: "Fred again..",
-            duration: 180
+            name: "Agua Marina - Tu Traición (Concierto en Vivo)",
+            artist: "Agua Marina",
+            duration: 300
         }
     },
+    // CASO 3: Daniela Darcourt (Salsa - Identidad exacta)
     {
-        desc: "COMPLEX ARTIST: Search with full artist string",
+        desc: "Daniela Darcourt - Señor Mentira",
         params: {
-            targetArtist: "Fred again.., CA7RIEL, Paco Amoroso",
-            targetTitle: "Beto's Horns",
+            targetArtist: "Daniela Darcourt",
+            targetTitle: "Señor Mentira",
         },
         candidate: {
-            name: "Fred again.. x CA7RIEL x Paco Amoroso - Beto's Horns",
-            artist: "Fred again..",
-            duration: 180
+            name: "Daniela Darcourt - Señor Mentira (Salsa Version)",
+            artist: "Daniela Darcourt",
+            duration: 280
         }
     },
+    // CASO 4: Armonía 10 (Separadores raros comunes en uploads peruanos)
     {
-        desc: "TYPO/VARIATION: Betos Horn (Missing apos/s) [Should PASS with adaptive]",
+        desc: "Armonía 10 - La Duda (Formato cumbia)",
         params: {
-            targetArtist: "Fred again..",
-            targetTitle: "Beto's Horns",
+            targetArtist: "Armonía 10",
+            targetTitle: "La Duda",
         },
+        // A veces suben como "ARMONIA 10 - LA DUDA | AUDIO OFICIAL"
         candidate: {
-            name: "Fred again.. - Betos Horn",
-            artist: "Fred again..",
-            duration: 180
+            name: "ARMONIA 10 - LA DUDA | AUDIO OFICIAL 2024",
+            artist: "Armonía 10",
+            duration: 210
         }
     },
+    // CASO 5: Corazón Serrano (Mixes - Debería ser rechazado)
     {
-        desc: "LIVE: Fred again.. - Beto's Horns (Live) [Should FAIL]",
+        desc: "Corazón Serrano - Mix (Rechazo esperado)",
         params: {
-            targetArtist: "Fred again..",
-            targetTitle: "Beto's Horns",
+            targetArtist: "Corazón Serrano",
+            targetTitle: "Hasta La Raíz",
         },
         candidate: {
-            name: "Fred again.. - Beto's Horns (Live at Boiler Room)",
-            artist: "Fred again..",
-            duration: 180
+            name: "Corazón Serrano - Mix Hasta La Raíz / Tomando Cerveza",
+            artist: "Corazón Serrano",
+            duration: 600
         }
     }
 ];

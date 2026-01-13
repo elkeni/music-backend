@@ -165,24 +165,7 @@ export function detectVersion(title) {
     return { type: 'original', detail: null, isForbidden: false };
 }
 
-/**
- * Detecta versión prohibida (legacy - para compatibilidad)
- * @deprecated Usar detectVersion() en su lugar
- */
-export function detectForbiddenVersion(title) {
-    const version = detectVersion(title);
-    return version.isForbidden ? version.type : null;
-}
 
-/**
- * Detecta versión válida (legacy - para compatibilidad)
- * @deprecated Usar detectVersion() en su lugar
- */
-export function detectValidVersion(title) {
-    const version = detectVersion(title);
-    if (version.isForbidden) return { type: null, details: null };
-    return { type: version.type, details: version.detail };
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONTENIDO BASURA
@@ -452,7 +435,8 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     const targetTitleMainNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitleMainRaw)));
 
     // HELPER: Limpiar spam de versiones para comparar "Esencia vs Esencia"
-    const removeVersionSpam = (t) => t ? t.replace(/\b(remaster|remastered|remix|mix|radio edit|extended|version|edit)\b/gi, '').replace(/\s+/g, ' ').trim() : '';
+    // Ahora incluye "en vivo", "concierto", "live" para que la excepción peruana funcione con scores altos
+    const removeVersionSpam = (t) => t ? t.replace(/\b(remaster|remastered|remix|mix|radio edit|extended|version|edit|vivo|en vivo|concierto|live)\b/gi, '').replace(/\s+/g, ' ').trim() : '';
 
     const candTitleBase = removeVersionSpam(candTitle);
 
@@ -684,7 +668,30 @@ export function evaluateCandidate(candidate, params) {
     if (version.isForbidden) {
         // EXCEPCIÓN: Si el usuario busca explícitamente "En Vivo" o "Live", permitimos la versión
         const targetWantsLive = /\b(live|en\s*vivo|concierto|vivo|directo)\b/i.test(targetTitle || '');
-        const isLiveException = targetWantsLive && (version.type === 'live' || version.type === 'cover');
+        let isLiveException = targetWantsLive && (version.type === 'live' || version.type === 'cover');
+
+        // 🇵🇪 EXCEPCIÓN PERÚ (Cumbia/Salsa Friendly):
+        // Permitimos versiones en vivo para artistas de cumbia/salsa donde el hit suele ser en vivo.
+        // Lista blanca de artistas y palabras clave comunes en Perú.
+        if (!isLiveException && version.type === 'live') {
+            const artistLower = (extractArtistInfo(candidate).primary || '').toLowerCase();
+            const LIVE_FRIENDLY_KEYWORDS = [
+                'grupo 5', 'agua marina', 'armonía 10', 'armonia 10', 'corazón serrano', 'corazon serrano',
+                'daniela darcourt', 'combinación de la habana', 'son tentación', 'josimar',
+                'yahaira plasencia', 'gran orquesta', 'hermanos', 'orquesta', 'zaperoko',
+                'septeto', 'papillón', 'deyvis orosco'
+            ];
+
+            const isFriendlyArtist = LIVE_FRIENDLY_KEYWORDS.some(kw => artistLower.includes(kw));
+
+            if (isFriendlyArtist) {
+                // Solo permitimos si la identidad del título es muy fuerte (evitar falsos positivos en vivo)
+                // Se evaluará más adelante, por ahora levantamos el flag de rechazo.
+                isLiveException = true;
+                // Marcamos el detalle para penalizar score después, no rechazar.
+                version.detail = 'live_exception_peru';
+            }
+        }
 
         if (!isLiveException) {
             return {
@@ -754,10 +761,19 @@ export function evaluateCandidate(candidate, params) {
     const isClean = cleanPattern.test(candTitleRawLower) && !explicitPattern.test(candTitleRawLower);
     const isExplicit = explicitPattern.test(candTitleRawLower);
 
-    let versionScore = version.type === 'original' ? 1.0 :
-        version.type === 'remaster' ? 0.98 :
-            version.type === 'remix' ? 0.90 : // Subido de 0.85
-                version.type === 'radio_edit' ? 0.95 : 0.9;
+    let versionScore = 1.0;
+
+    if (version.type === 'original') versionScore = 1.0;
+    else if (version.type === 'remaster') versionScore = 0.98;
+    else if (version.type === 'radio_edit') versionScore = 0.95;
+    else if (version.type === 'extended') versionScore = 0.90;
+    else if (version.type === 'remix') versionScore = 0.90;
+    else if (version.type === 'live' && version.detail === 'live_exception_peru') {
+        // Penalización moderada para "En Vivo" aceptado (para que pierda contra estudio si existe)
+        versionScore = 0.75;
+    } else {
+        versionScore = 0.9;
+    }
 
     // AJUSTE POR PREFERENCIA DE USUARIO (Sin censura > Censurado)
     if (isClean) {

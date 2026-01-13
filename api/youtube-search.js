@@ -49,14 +49,7 @@ const allowCors = (fn) => async (req, res) => {
 // FALLBACK: Funciones mínimas si el módulo no carga
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function fallbackNormalize(text) {
-    if (!text) return '';
-    return text.toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^\w\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
+
 
 function fallbackExtractArtist(item) {
     if (item.primaryArtists?.trim()) return item.primaryArtists.trim();

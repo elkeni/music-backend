@@ -35,8 +35,7 @@ import { addSong, addSongs, getSongCount } from './song-store.js';
 // ═══════════════════════════════════════════════════════════════════════════════
 import {
     extractArtistName,
-    detectValidVersion,
-    detectForbiddenVersion,
+    detectVersion,
     isTrashContent
 } from './extraction/youtube-extractor.js';
 
@@ -78,14 +77,13 @@ export function transformYouTubeItem(ytItem) {
             return null;
         }
 
-        const forbidden = detectForbiddenVersion(title);
-        if (forbidden) {
-            console.log(`[song-loader] Ignored forbidden version (${forbidden}): "${title}"`);
+        // 5. Detectar Versión y Filtrar Prohibidas
+        const version = detectVersion(title);
+
+        if (version.isForbidden) {
+            console.log(`[song-loader] Ignored forbidden version (${version.type}): "${title}"`);
             return null;
         }
-
-        // 5. Detectar versión válida
-        const version = detectValidVersion(title);
 
         // 6. Crear Song
         return createSong({
@@ -94,7 +92,7 @@ export function transformYouTubeItem(ytItem) {
             artistNames: [artist], // Array simple por ahora
             duration: duration,
             versionType: version.type,
-            versionDetails: version.details || undefined,
+            versionDetails: version.detail || undefined, // Nota: detectVersion usa 'detail' (singular)
             source: SOURCE_TYPES.YOUTUBE,
             sourceId: id,
             metadata: {
@@ -172,7 +170,9 @@ export function transformDeezerTrack(deezerTrack) {
         // ═══════════════════════════════════════════════════════════════════════
         // DETECTAR VERSIÓN
         // ═══════════════════════════════════════════════════════════════════════
-        const version = detectValidVersion(deezerTrack.title || '');
+        const versionCheck = detectVersion(deezerTrack.title || '');
+        const versionType = versionCheck.isForbidden ? null : versionCheck.type;
+        const versionDetail = versionCheck.isForbidden ? null : versionCheck.detail;
 
         // ═══════════════════════════════════════════════════════════════════════
         // EXTRAER ALBUM Y FECHA - SIN INFERENCIAS
@@ -209,8 +209,8 @@ export function transformDeezerTrack(deezerTrack) {
             album: album,
             releaseDate: releaseDate,
             duration: duration,
-            versionType: version.type,
-            versionDetails: version.details || undefined,
+            versionType: versionType,
+            versionDetails: versionDetail || undefined,
             source: SOURCE_TYPES.DEEZER,
             sourceId: String(deezerTrack.id),
             metadata: {
