@@ -1,19 +1,19 @@
 
 import { evaluateCandidate } from './src/music/extraction/youtube-extractor.js';
 
+
 const testCases = [
-    // CASO 1: Grupo 5 - Motor y Motivo (Clásico de Cumbia)
-    // Desafío: Metadata de YouTube a menudo tiene "Video Oficial" o "En Vivo" (aunque sea la única versión popular)
+    // CASO DEBUG: La Culebritica (Falla reportada)
     {
-        desc: "Grupo 5 - Motor y Motivo (Video Oficial)",
+        desc: "Grupo 5 - La Culebritica",
         params: {
             targetArtist: "Grupo 5",
-            targetTitle: "Motor y Motivo",
+            targetTitle: "La Culebritica",
         },
         candidate: {
-            name: "Grupo 5 - Motor y Motivo (Video Oficial)",
+            name: "Grupo 5 - La culebrítica",
             artist: "Grupo 5",
-            duration: 245
+            duration: 240
         }
     },
     // CASO 2: Agua Marina (Complejo: Título largo con ubicación común en Perú)
