@@ -396,16 +396,43 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     // ═══════════════════════════════════════════════════════════════════════════
     // Aplicamos cleanTitle + cleanSpanishTitle local
     const rawCandTitle = candidate.name || candidate.title || '';
-    let candTitle = normalizeText(cleanSpanishTitle(cleanTitle(rawCandTitle)));
-    const candArtist = normalizeArtist(extractArtistInfo(candidate).primary);
 
     // FIX: Eliminar el artista del título si aparece al inicio (común en YouTube)
-    // Usamos normalizeText standard (sin puntuación) para coincidir con candTitle
+    // ESTRATEGIA: Detectar separadores " - " antes de normalizar
+    let cleanRawTitle = rawCandTitle;
+
+    // Separadores fuertes: " - ", " : ", " | "
+    const separatorRegex = /\s+[-:|]\s+/;
+    if (targetArtist && separatorRegex.test(rawCandTitle)) {
+        const parts = rawCandTitle.split(separatorRegex);
+        // Solo si hay 2 o 3 partes (Artist - Title) o (Artist - Title - Official)
+        if (parts.length >= 2) {
+            const p0 = normalizeText(parts[0]);
+            const pLast = normalizeText(parts[parts.length - 1]);
+            const targetSimple = normalizeText(targetArtist);
+
+            // Caso 1: "Artist... - Title" (Prefijo)
+            // Verificamos si la primera parte CONTIENE al artista buscado
+            if (p0.includes(targetSimple) || targetSimple.includes(p0)) {
+                // Asumimos que todo lo que sigue es el título
+                cleanRawTitle = parts.slice(1).join(' ');
+            }
+            // Caso 2: "Title - Artist" (Sufijo)
+            else if (pLast.includes(targetSimple) || targetSimple.includes(pLast)) {
+                cleanRawTitle = parts.slice(0, parts.length - 1).join(' ');
+            }
+        }
+    }
+
+    let candTitle = normalizeText(cleanSpanishTitle(cleanTitle(cleanRawTitle)));
+    const candArtist = normalizeArtist(extractArtistInfo(candidate).primary);
+
+    // Fallback: Si la limpieza por separador no funcionó (o no había separador), 
+    // intentamos quitar el artista del inicio del string normalizado.
     if (targetArtist) {
         const artistSimple = normalizeText(targetArtist);
         if (artistSimple.length > 0 && candTitle.startsWith(artistSimple)) {
             const remainder = candTitle.replace(artistSimple, '').trim();
-            // Solo reemplazar si queda algo sustancial (evitar vaciar títulos homónimos)
             if (remainder.length > 0) {
                 candTitle = remainder;
             }
@@ -423,6 +450,11 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
         targetTitleMainRaw = targetTitleMainRaw.replace(/[\(\[].*?[\)\]]/g, '');
     }
     const targetTitleMainNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitleMainRaw)));
+
+    // HELPER: Limpiar spam de versiones para comparar "Esencia vs Esencia"
+    const removeVersionSpam = (t) => t ? t.replace(/\b(remaster|remastered|remix|mix|radio edit|extended|version|edit)\b/gi, '').replace(/\s+/g, ' ').trim() : '';
+
+    const candTitleBase = removeVersionSpam(candTitle);
 
     // FUNCIÓN DE SIMILITUD ESTRICTA (0 - 1.0)
     const calculateStrictScore = (cand, target) => {
@@ -454,7 +486,24 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     const evaluateTitleAgainst = (targetNorm) => {
         if (!targetNorm) return { score: 0, match: 'none' };
 
-        const score = calculateStrictScore(candTitle, targetNorm);
+        let score = calculateStrictScore(candTitle, targetNorm);
+
+        // 🧠 RESCATE INTELIGENTE (Base Identity):
+        // Si falla la comparación directa, probamos comparando las versiones LIMPIAS (sin remix/remaster).
+        // Esto permite que "Song (Remaster)" haga match con "Song".
+        if (score < 0.85) {
+            const targetBase = removeVersionSpam(targetNorm);
+            // Solo aplicar si los títulos base no quedaron vacíos
+            if (candTitleBase.length > 1 && targetBase.length > 1) {
+                const baseScore = calculateStrictScore(candTitleBase, targetBase);
+
+                // Si la comparación base es excelente, la usamos.
+                // Penalizamos ligeramente (0.98) para que un match EXACTO real gane prioridad si existe.
+                if (baseScore > score) {
+                    score = Math.max(score, baseScore * 0.98);
+                }
+            }
+        }
 
         let matchType = 'none';
         if (score === 1.0) matchType = 'exact';
@@ -749,19 +798,28 @@ export function evaluateCandidate(candidate, params) {
     const hasTargetTitle = !!(targetTitle && targetTitle.trim());
 
     if (hasTargetTitle) {
-        // Solo aceptamos matches EXACTOS o MUY CERCANOS
-        const isDefinitelyCorrect =
+        // 🔐 MATCHING ADAPTATIVO 2.0:
+        // El usuario quiere "exacto" pero que "encuentre todo".
+        // ESTRATEGIA: Si el Artista es INDISCUTIBLEMENTE el correcto, permitimos variaciones menores en el título.
+        // Si el Artista es solo un "match parcial", exigimos perfección en el título.
+
+        const artistIsPerfect = identity.artistMatch === 'exact' || identity.artistMatch === 'exact_full';
+
+        // Umbral dinámico:
+        // - Artista Perfecto: 82% match en título (tolera errores de dedo, palabras extra irrelevantes)
+        // - Artista Dudoso:   94% match en título (debe ser casi idéntico)
+        const titleThreshold = artistIsPerfect ? 0.82 : 0.94;
+
+        const isTitleAcceptable =
             identity.titleMatch === 'exact' ||
             identity.titleMatch === 'near_exact' ||
-            identity.titleScore >= 0.94; // 95% aprox
+            identity.titleScore >= titleThreshold;
 
-        // NO ACEPTAMOS isConditionallyCorrect (matches parciales se rechazan)
-
-        if (!isDefinitelyCorrect) {
+        if (!isTitleAcceptable) {
             return {
                 passed: false,
                 rejected: true,
-                rejectReason: 'title_not_matching_strict_95_percent',
+                rejectReason: `title_mismatch_strict (score: ${identity.titleScore.toFixed(2)} < required: ${titleThreshold})`,
                 scores: {
                     identityScore: Math.round(identityScore * 100) / 100,
                     versionScore: Math.round(versionScore * 100) / 100,

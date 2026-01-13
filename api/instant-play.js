@@ -95,8 +95,9 @@ async function quickSearch(artist, track) {
             const evaluation = evaluateCandidate(candidate, targetParams);
 
             if (evaluation.passed) {
-                // Si encontramos uno perfecto (>= 0.95), lo tomamos YA.
-                if (evaluation.scores.finalConfidence >= 0.95) {
+                // Si encontramos uno excelente (>= 0.90), lo tomamos YA.
+                // Con el nuevo extractor adaptativo, 0.90 es muy seguro (implica Artista Exacto + Título Muy Bueno)
+                if (evaluation.scores.finalConfidence >= 0.90) {
                     bestCandidate = item;
                     break;
                 }
