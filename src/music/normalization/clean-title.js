@@ -119,6 +119,23 @@ export function cleanTitle(title) {
         result = result.replace(pattern, '');
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIX 5: UNPARENTHESIZED FEATS (YouTube Standard)
+    // "Song Name feat. Artist" -> "Song Name"
+    // "Song Name ft. Artist" -> "Song Name"
+    // Must be at end of string or before other separators
+    // ═══════════════════════════════════════════════════════════════════════════
+    const UNPARENTHESIZED_FEAT_PATTERNS = [
+        /\s+feat\.\s+.*$/i,
+        /\s+ft\.\s+.*$/i,
+        /\s+featuring\s+.*$/i,
+        /\s+with\s+.*$/i
+    ];
+
+    for (const pattern of UNPARENTHESIZED_FEAT_PATTERNS) {
+        result = result.replace(pattern, '');
+    }
+
     // Colapsar múltiples espacios y trim
     result = result.replace(/\s+/g, ' ').trim();
 

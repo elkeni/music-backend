@@ -489,6 +489,20 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
             }
         }
 
+        // 🧠 RESCATE FT/FEAT (Sin paréntesis)
+        // YouTube a veces pone "Song Name ft. Artist" sin paréntesis.
+        // Si el score es bajo, intentamos limpiar "ft." manual si no se hizo antes.
+        if (score < 0.9 && (candTitle.includes(' ft. ') || candTitle.includes(' feat. '))) {
+            const cleanFeat = candTitle.replace(/\s+(ft\.|feat\.)\s+.*$/i, '').trim();
+            if (cleanFeat.length > 1) {
+                const featScore = calculateStrictScore(cleanFeat, targetNorm);
+                if (featScore > score) {
+                    score = Math.max(score, featScore * 0.95);
+                }
+            }
+        }
+
+
         let matchType = 'none';
         if (score === 1.0) matchType = 'exact';
         else if (score >= 0.95) matchType = 'near_exact'; // Cumple criterio 95%
@@ -822,9 +836,9 @@ export function evaluateCandidate(candidate, params) {
         const artistIsPerfect = identity.artistMatch === 'exact' || identity.artistMatch === 'exact_full';
 
         // Umbral dinámico:
-        // - Artista Perfecto: 82% match en título (tolera errores de dedo, palabras extra irrelevantes)
-        // - Artista Dudoso:   94% match en título (debe ser casi idéntico)
-        const titleThreshold = artistIsPerfect ? 0.82 : 0.94;
+        // - Artista Perfecto: 80% match en título (tolera más diferencias)
+        // - Artista Dudoso:   88% match en título (tolera pequeñas diferencias)
+        const titleThreshold = artistIsPerfect ? 0.80 : 0.88;
 
         const isTitleAcceptable =
             identity.titleMatch === 'exact' ||
@@ -856,10 +870,10 @@ export function evaluateCandidate(candidate, params) {
 
     let passed;
     if (hasTargetTitle) {
-        // MODO ULTRA ESTRICTO: 
-        // 1. Identity Score debe ser >= 0.95
+        // MODO ULTRA ESTRICTO RELAJADO 2.0: 
+        // 1. Identity Score debe ser >= 0.85 (antes 0.90)
         // 2. Y el score de artista debe ser también muy alto (>= 0.9)
-        passed = (identityScore >= 0.94 && identity.artistScore >= 0.90);
+        passed = (identityScore >= 0.88 && identity.artistScore >= 0.90);
     } else {
         passed = identity.passed ||
             identityScore >= 0.35 ||

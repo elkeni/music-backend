@@ -46,140 +46,132 @@ const allowCors = (fn) => async (req, res) => {
 // BÚSQUEDA RÁPIDA EN SAAVN
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Selecciona el mejor candidato de una lista de resultados
+ * @param {Array} results - Lista de resultados
+ * @param {string} artist - Artista buscado
+ * @param {string} track - Canción buscada
+ */
+function selectBestCandidate(results, artist, track) {
+    let bestCandidate = null;
+    let bestScore = -1;
+
+    const targetParams = {
+        targetTitle: track,
+        targetArtist: artist,
+        targetDuration: 0,
+        targetAlbum: ''
+    };
+
+    for (const item of results) {
+        // Normalizar formato
+        const candidate = {
+            name: item.name || item.title,
+            title: item.name || item.title,
+            artist: item.artist || item.primaryArtists || '',
+            artists: item.artists || [],
+            duration: item.duration || 0,
+            year: item.year || item.releaseDate,
+            album: item.album?.name || item.album
+        };
+
+        const evaluation = evaluateCandidate(candidate, targetParams);
+
+        if (evaluation.passed) {
+            if (evaluation.scores.finalConfidence >= 0.90) {
+                return item; // Retorno inmediato si es excelente
+            }
+
+            if (evaluation.scores.finalConfidence > bestScore) {
+                bestScore = evaluation.scores.finalConfidence;
+                bestCandidate = item;
+            }
+        } else {
+            console.log(`[DEBUG] Rejected: "${candidate.title}" Reason: ${evaluation.rejectReason} Score: ${evaluation.scores.finalConfidence}`);
+            console.log(`[DEBUG] Identity:`, JSON.stringify(evaluation.details?.identity));
+        }
+    }
+
+    return bestCandidate;
+}
+
 async function quickSearch(artist, track) {
     const query = `${artist} ${track}`.trim();
-    // EXTENSIVE SEARCH: Aumentamos el límite a 10 resultados para tener más opciones de encontrar el match perfecto
+    // EXTENSIVE SEARCH: Aumentamos el límite a 10 resultados
     const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=10`;
 
     const ctrl = new AbortController();
-    // 2.5s para permitir búsqueda más amplia
     const tid = setTimeout(() => ctrl.abort(), 2500);
 
+    let bestCandidate = null;
+
+    // 1. INTENTO PRIMARIO: Saavn API
     try {
-        let results = [];
-        let source = 'saavn';
-
-        // 1. INTENTO PRIMARIO: Saavn API
-        try {
-            const res = await fetch(url, { signal: ctrl.signal });
-            clearTimeout(tid);
-
-            if (res.ok) {
-                const data = await res.json();
-                results = data?.data?.results || [];
-            }
-        } catch (e) {
-            console.log('[instant-play] Saavn search failed/timeout, trying fallback...');
-        }
-
-        // 2. FALLBACK: YouTube-SR (Direct Library)
-        if (results.length === 0) {
-            try {
-                console.log('[instant-play] ⚠️ Falling back to clean YouTube-SR...');
-                source = 'youtube-sr';
-                const { createRequire } = await import('module');
-                const require = createRequire(import.meta.url);
-                // Cargar dinámicamente
-                const YouTube = require('youtube-sr').default || require('youtube-sr');
-
-                // Buscar video (limit 5 es suficiente para instant match)
-                const videos = await YouTube.search(query, { limit: 5, type: 'video', safeSearch: true });
-
-                // Adaptar formato a lo que espera el evaluador
-                results = videos.map(v => ({
-                    id: v.id,
-                    name: v.title,
-                    title: v.title,
-                    artist: v.channel ? v.channel.name : '',
-                    primaryArtists: v.channel ? v.channel.name : '',
-                    duration: v.duration / 1000,
-                    image: [{ url: v.thumbnail?.url || '', quality: '500x500' }]
-                }));
-
-                console.log(`[instant-play] Fallback found ${results.length} candidates`);
-
-            } catch (err) {
-                console.error('[instant-play] Fallback failed:', err.message);
-            }
-        }
-
-        if (results.length === 0) return null;
-
-        // ═══════════════════════════════════════════════════════════════════════════
-        // SELECCIÓN INTELIGENTE 2.0 (MODO ULTRA ESTRICTO)
-        // ═══════════════════════════════════════════════════════════════════════════
-
-        let bestCandidate = null;
-        let bestScore = -1;
-
-        const targetParams = {
-            targetTitle: track,
-            targetArtist: artist,
-            targetDuration: 0,
-            targetAlbum: ''
-        };
-
-        // Escanear los candidatos
-        for (const item of results) {
-            // Normalizar formato
-            const candidate = {
-                name: item.name || item.title,
-                title: item.name || item.title,
-                artist: item.artist || item.primaryArtists || '',
-                artists: item.artists || [],
-                duration: item.duration || 0,
-                year: item.year || item.releaseDate,
-                album: item.album?.name || item.album
-            };
-
-            const evaluation = evaluateCandidate(candidate, targetParams);
-
-            if (evaluation.passed) {
-                // Si encontramos uno excelente (>= 0.90), lo tomamos YA.
-                // Con el nuevo extractor adaptativo, 0.90 es muy seguro (implica Artista Exacto + Título Muy Bueno)
-                if (evaluation.scores.finalConfidence >= 0.90) {
-                    bestCandidate = item;
-                    break;
-                }
-
-                if (evaluation.scores.finalConfidence > bestScore) {
-                    bestScore = evaluation.scores.finalConfidence;
-                    bestCandidate = item;
-                }
-            }
-        }
-
-        // SIN FALLBACKS SUCIOS:
-        // Si no pasa el filtro estricto de evaluateCandidate (que ahora exige ~95%),
-        // devolvemos null. Preferimos silencio a ruido.
-
-        // ÚLTIMA LÍNEA DE DEFENSA:
-        // Si aun así no tenemos candidato, SIGNIFICA QUE NO HAY NADA DEL ARTISTA.
-        // Devolvemos NULL para que el frontend no reproduzca basura.
-        if (!bestCandidate) {
-            console.log('[instant-play] ❌ No valid match found (Artist specific). Aborting.');
-            return null;
-        }
-
-        const best = bestCandidate;
-
-        // Extraer artista limpio usando el extractor
-        const artistInfo = extractArtistInfo({
-            primaryArtists: best.primaryArtists || best.artist || '',
-            artists: best.artists
-        });
-
-        return {
-            videoId: best.id,
-            title: best.name || best.title || track,
-            artist: artistInfo.full || artist, // Usar nombre limpio
-            thumbnail: best.image?.find(i => i.quality === '500x500')?.url || best.image?.[0]?.url || ''
-        };
-    } catch (e) {
+        const res = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
-        console.log('[instant-play] Search failed:', e.message);
+
+        if (res.ok) {
+            const data = await res.json();
+            const results = data?.data?.results || [];
+
+            if (results.length > 0) {
+                bestCandidate = selectBestCandidate(results, artist, track);
+            }
+        }
+    } catch (e) {
+        console.log('[instant-play] Saavn search failed/timeout, trying fallback...');
+    }
+
+    // 2. FALLBACK: YouTube-SR (Si no hubo match en Saavn)
+    if (!bestCandidate) {
+        try {
+            console.log('[instant-play] ⚠️ Falling back to clean YouTube-SR...');
+            const { createRequire } = await import('module');
+            const require = createRequire(import.meta.url);
+            const YouTube = require('youtube-sr').default || require('youtube-sr');
+
+            console.log(`[instant-play] Searching YouTube-SR with query: "${query}"`);
+            const videos = await YouTube.search(query, { limit: 5, type: 'video', safeSearch: true });
+            console.log(`[instant-play] YouTube-SR found ${videos.length} videos`);
+
+            const results = videos.map(v => ({
+                id: v.id,
+                name: v.title,
+                title: v.title,
+                artist: v.channel ? v.channel.name : '',
+                primaryArtists: v.channel ? v.channel.name : '',
+                duration: v.duration / 1000,
+                image: [{ url: v.thumbnail?.url || '', quality: '500x500' }]
+            }));
+
+            if (results.length > 0) {
+                bestCandidate = selectBestCandidate(results, artist, track);
+            }
+
+        } catch (err) {
+            console.error('[instant-play] Fallback failed:', err.message);
+        }
+    }
+
+    if (!bestCandidate) {
+        console.log('[instant-play] ❌ No valid match found (Artist specific). Aborting.');
         return null;
     }
+
+    const best = bestCandidate;
+
+    // Extraer artista limpio usando el extractor
+    const artistInfo = extractArtistInfo({
+        primaryArtists: best.primaryArtists || best.artist || '',
+        artists: best.artists
+    });
+
+    return {
+        videoId: best.id,
+        title: best.name || best.title || track,
+        artist: artistInfo.full || artist, // Usar nombre limpio
+        thumbnail: best.image?.find(i => i.quality === '500x500')?.url || best.image?.[0]?.url || ''
+    };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
