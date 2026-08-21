@@ -298,13 +298,24 @@ export function extractArtistName(item) {
     return '';
 }
 
+function decodeHtmlEntities(value) {
+    return String(value || '')
+        .replace(/&amp;/gi, '&')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#0*39;|&apos;/gi, "'")
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+        .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)));
+}
+
 /**
  * Extrae información detallada del artista
  * @param {Object} item - Item de la API
  * @returns {{ primary: string, collaborators: string[], full: string }}
  */
 export function extractArtistInfo(item) {
-    let primary = extractArtistName(item);
+    let primary = decodeHtmlEntities(extractArtistName(item));
     const collaborators = [];
 
     // Separar colaboradores

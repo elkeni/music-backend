@@ -75,6 +75,20 @@ test('Acepta sufijo de canal oficial', () => {
     assert(identity.artistScore === 1, 'Topic debe ser ruido de canal');
 });
 
+test('Decodifica entidades HTML en artistas colaborativos de Saavn', () => {
+    const result = evaluate({
+        targetArtist: 'CA7RIEL & Paco Amoroso',
+        targetTitle: 'DUMBAI',
+        candidate: {
+            name: 'DUMBAI',
+            artists: { primary: [{ name: 'CA7RIEL &amp; Paco Amoroso' }] },
+            duration: 148
+        }
+    });
+    assert(result.passed, result.rejectReason);
+    assert(result.details.identity.artistScore === 1, 'la entidad &amp; debe decodificarse');
+});
+
 test('Infiere artista del título si falta metadata', () => {
     const result = evaluate({
         targetArtist: 'Adele',

@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vercel dev",
     "start": "vercel dev",
-    "test:matching": "node src/music/tests/matching-regression-tests.js"
+    "test:matching": "node src/music/tests/matching-regression-tests.js && node src/music/tests/instant-play-query-tests.js"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

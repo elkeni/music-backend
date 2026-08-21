@@ -95,28 +95,66 @@ function selectBestCandidate(results, artist, track) {
     return bestCandidate;
 }
 
+/**
+ * Saavn es muy sensible a &, puntos, apóstrofes Unicode y descriptores de
+ * versión. Consultamos la forma original y una forma segura, y luego dejamos
+ * que el matcher estricto decida entre todos los candidatos.
+ */
+export function buildSearchQueries(artist, track) {
+    const rawQuery = `${artist || ''} ${track || ''}`.replace(/\s+/g, ' ').trim();
+    const cleanPart = (value) => String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[\u2018\u2019']/g, '')
+        .replace(/[&]/g, ' ')
+        .replace(/[.]+/g, ' ')
+        .replace(/[\[(][^\])]*\b(remix|remaster(?:ed)?|live|en\s+vivo|radio\s+edit|version)\b[^\])]*[\])]/gi, ' ')
+        .replace(/[^a-z0-9@\-\s]/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const cleanQuery = `${cleanPart(artist)} ${cleanPart(track)}`.replace(/\s+/g, ' ').trim();
+    return [...new Set([rawQuery, cleanQuery].filter(Boolean))];
+}
+
+async function searchSaavnCandidates(artist, track) {
+    const queries = buildSearchQueries(artist, track);
+    const searches = queries.map(async (query) => {
+        const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=10`;
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 2500);
+
+        try {
+            const res = await fetch(url, { signal: ctrl.signal });
+            if (!res.ok) return [];
+            const data = await res.json();
+            return data?.data?.results || [];
+        } catch {
+            return [];
+        } finally {
+            clearTimeout(tid);
+        }
+    });
+
+    const batches = await Promise.all(searches);
+    const unique = new Map();
+    for (const item of batches.flat()) {
+        const key = item.id || `${item.name}|${item.primaryArtists || ''}`;
+        if (!unique.has(key)) unique.set(key, item);
+    }
+    return [...unique.values()];
+}
+
 async function quickSearch(artist, track) {
     const query = `${artist} ${track}`.trim();
-    // EXTENSIVE SEARCH: Aumentamos el límite a 10 resultados
-    const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=10`;
-
-    const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), 2500);
 
     let bestCandidate = null;
 
-    // 1. INTENTO PRIMARIO: Saavn API
+    // 1. INTENTO PRIMARIO: Saavn API con variantes robustas de query
     try {
-        const res = await fetch(url, { signal: ctrl.signal });
-        clearTimeout(tid);
-
-        if (res.ok) {
-            const data = await res.json();
-            const results = data?.data?.results || [];
-
-            if (results.length > 0) {
-                bestCandidate = selectBestCandidate(results, artist, track);
-            }
+        const results = await searchSaavnCandidates(artist, track);
+        if (results.length > 0) {
+            bestCandidate = selectBestCandidate(results, artist, track);
         }
     } catch (e) {
         console.log('[instant-play] Saavn search failed/timeout, trying fallback...');
