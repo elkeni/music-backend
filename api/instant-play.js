@@ -87,8 +87,10 @@ function selectBestCandidate(results, artist, track) {
                 bestCandidate = item;
             }
         } else {
-            console.log(`[DEBUG] Rejected: "${candidate.title}" Reason: ${evaluation.rejectReason} Score: ${evaluation.scores.finalConfidence}`);
-            console.log(`[DEBUG] Identity:`, JSON.stringify(evaluation.details?.identity));
+            if (process.env.DEBUG_MATCHING === 'true') {
+                console.log(`[DEBUG] Rejected: "${candidate.title}" Reason: ${evaluation.rejectReason} Score: ${evaluation.scores.finalConfidence}`);
+                console.log(`[DEBUG] Identity:`, JSON.stringify(evaluation.details?.identity));
+            }
         }
     }
 
@@ -113,12 +115,49 @@ export function buildSearchQueries(artist, track) {
         .replace(/\s+/g, ' ')
         .trim();
 
-    const cleanQuery = `${cleanPart(artist)} ${cleanPart(track)}`.replace(/\s+/g, ' ').trim();
-    return [...new Set([rawQuery, cleanQuery].filter(Boolean))];
+    const cleanArtist = cleanPart(artist);
+    const cleanTrack = cleanPart(track);
+    const cleanQuery = `${cleanArtist} ${cleanTrack}`.replace(/\s+/g, ' ').trim();
+
+    // Algunos índices de Saavn ponderan mucho más las primeras palabras y no
+    // interpretan bien contracciones como "Can't". Estas variantes solo
+    // amplían el recall; selectBestCandidate mantiene los gates estrictos de
+    // artista + título para impedir falsos positivos.
+    const weakSearchWords = new Set(['a', 'an', 'and', 'can', 'cant', 'cannot', 'of', 'or', 't', 'the']);
+    const compactArtist = cleanArtist
+        .split(' ')
+        .filter(token => token && !weakSearchWords.has(token.toLowerCase()))
+        .join(' ');
+    const titleFirstQuery = `${cleanTrack} ${cleanArtist}`.replace(/\s+/g, ' ').trim();
+    const compactArtistQuery = `${cleanTrack} ${compactArtist}`.replace(/\s+/g, ' ').trim();
+
+    return [...new Set([
+        rawQuery,
+        cleanQuery,
+        titleFirstQuery,
+        compactArtistQuery,
+        cleanTrack
+    ].filter(Boolean))];
 }
 
-async function searchSaavnCandidates(artist, track) {
-    const queries = buildSearchQueries(artist, track);
+export function buildMetadataSearchQueries(metadata, requestedArtist, requestedTrack) {
+    if (!metadata) return [];
+
+    const contributors = Array.isArray(metadata.contributors)
+        ? metadata.contributors.map(item => item?.name || item).filter(Boolean)
+        : [];
+    const queries = contributors.map(name => `${requestedTrack} ${name}`.trim());
+
+    if (metadata.album) queries.push(`${metadata.album} ${requestedTrack}`.trim());
+    if (metadata.artist && metadata.artist !== requestedArtist) {
+        queries.push(`${requestedTrack} ${metadata.artist}`.trim());
+    }
+
+    return [...new Set(queries.filter(Boolean))];
+}
+
+async function searchSaavnCandidates(artist, track, extraQueries = []) {
+    const queries = [...new Set([...buildSearchQueries(artist, track), ...extraQueries])];
     const searches = queries.map(async (query) => {
         const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=10`;
         const ctrl = new AbortController();
@@ -145,10 +184,54 @@ async function searchSaavnCandidates(artist, track) {
     return [...unique.values()];
 }
 
-async function quickSearch(artist, track) {
-    const query = `${artist} ${track}`.trim();
+/**
+ * Saavn a veces no indexa una canción por su artista principal, especialmente
+ * en lanzamientos recientes con colaboradores. Deezer se usa únicamente como
+ * catálogo de metadatos para descubrir esos colaboradores/álbum; el audio
+ * continúa viniendo de Saavn y debe superar el matcher estricto.
+ */
+async function findExternalMetadata(artist, track) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 2200);
 
+    try {
+        const query = `artist:"${artist}" track:"${track}"`;
+        const searchUrl = `https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=5`;
+        const searchResponse = await fetch(searchUrl, { signal: ctrl.signal });
+        if (!searchResponse.ok) return null;
+
+        const searchData = await searchResponse.json();
+        const candidates = (searchData?.data || []).map(item => ({
+            ...item,
+            name: item.title,
+            artist: item.artist?.name || '',
+            artists: item.contributors || []
+        }));
+        const best = selectBestCandidate(candidates, artist, track);
+        if (!best?.id) return null;
+
+        const trackResponse = await fetch(`https://api.deezer.com/track/${best.id}`, {
+            signal: ctrl.signal
+        });
+        if (!trackResponse.ok) return null;
+
+        const details = await trackResponse.json();
+        return {
+            artist: details.artist?.name || best.artist?.name || '',
+            album: details.album?.title || '',
+            contributors: details.contributors || []
+        };
+    } catch (error) {
+        console.log('[instant-play] Metadata enrichment unavailable:', error.message);
+        return null;
+    } finally {
+        clearTimeout(tid);
+    }
+}
+
+async function quickSearch(artist, track) {
     let bestCandidate = null;
+    let metadataConfirmedTrack = false;
 
     // 1. INTENTO PRIMARIO: Saavn API con variantes robustas de query
     try {
@@ -160,40 +243,26 @@ async function quickSearch(artist, track) {
         console.log('[instant-play] Saavn search failed/timeout, trying fallback...');
     }
 
-    // 2. FALLBACK: YouTube-SR (Si no hubo match en Saavn)
+    // 2. ENRIQUECIMIENTO: recuperar colaboradores/álbum y reintentar Saavn.
     if (!bestCandidate) {
         try {
-            console.log('[instant-play] ⚠️ Falling back to clean YouTube-SR...');
-            const { createRequire } = await import('module');
-            const require = createRequire(import.meta.url);
-            const YouTube = require('youtube-sr').default || require('youtube-sr');
-
-            console.log(`[instant-play] Searching YouTube-SR with query: "${query}"`);
-            const videos = await YouTube.search(query, { limit: 5, type: 'video', safeSearch: true });
-            console.log(`[instant-play] YouTube-SR found ${videos.length} videos`);
-
-            const results = videos.map(v => ({
-                id: v.id,
-                name: v.title,
-                title: v.title,
-                artist: v.channel ? v.channel.name : '',
-                primaryArtists: v.channel ? v.channel.name : '',
-                duration: v.duration / 1000,
-                image: [{ url: v.thumbnail?.url || '', quality: '500x500' }]
-            }));
-
-            if (results.length > 0) {
-                bestCandidate = selectBestCandidate(results, artist, track);
+            const metadata = await findExternalMetadata(artist, track);
+            metadataConfirmedTrack = !!metadata;
+            const metadataQueries = buildMetadataSearchQueries(metadata, artist, track);
+            if (metadataQueries.length > 0) {
+                const enrichedResults = await searchSaavnCandidates(artist, track, metadataQueries);
+                bestCandidate = selectBestCandidate(enrichedResults, artist, track);
             }
-
         } catch (err) {
-            console.error('[instant-play] Fallback failed:', err.message);
+            console.error('[instant-play] Metadata-enriched search failed:', err.message);
         }
     }
 
     if (!bestCandidate) {
         console.log('[instant-play] ❌ No valid match found (Artist specific). Aborting.');
-        return null;
+        return {
+            failureCode: metadataConfirmedTrack ? 'AUDIO_SOURCE_UNAVAILABLE' : 'NO_MATCH'
+        };
     }
 
     const best = bestCandidate;
@@ -267,8 +336,9 @@ async function getAudioStream(videoId) {
 async function handler(req, res) {
     const startTime = Date.now();
 
-    // Cache agresivo
-    res.setHeader('Cache-Control', 'public, s-maxage=7200, stale-while-revalidate=3600');
+    // Los errores nunca deben quedar congelados en el CDN. Solo una respuesta
+    // reproducible recibe caché pública al final del handler.
+    res.setHeader('Cache-Control', 'no-store');
 
     const { artist, track, title } = req.query;
     const trackName = track || title || '';
@@ -285,10 +355,13 @@ async function handler(req, res) {
     // PASO 1: Búsqueda rápida
     const searchResult = await quickSearch(artist || '', trackName);
 
-    if (!searchResult) {
+    if (searchResult?.failureCode) {
         return res.status(404).json({
             success: false,
-            error: 'Track not found',
+            code: searchResult.failureCode,
+            error: searchResult.failureCode === 'AUDIO_SOURCE_UNAVAILABLE'
+                ? 'Track exists but is unavailable in the configured audio catalog'
+                : 'Track not found',
             ms: Date.now() - startTime
         });
     }
@@ -309,6 +382,7 @@ async function handler(req, res) {
     console.log(`[⚡ instant-play] ✅ Done in ${totalMs}ms`);
 
     // RESPUESTA EXITOSA
+    res.setHeader('Cache-Control', 'public, s-maxage=7200, stale-while-revalidate=3600');
     return res.status(200).json({
         success: true,
         audioUrl: streamResult.audioUrl,
