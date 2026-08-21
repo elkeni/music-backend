@@ -29,6 +29,7 @@ import { evaluateCandidate, extractArtistInfo } from '../src/music/extraction/yo
 export const config = { runtime: 'nodejs' };
 
 const SOURCE_API = process.env.SOURCE_API_URL || 'https://appmusic-phi.vercel.app';
+const SOUNDCLOUD_CLIENT_ID = process.env.SOUNDCLOUD_CLIENT_ID || '0dqfiN6c3Y9idZWFzMMulqPjotmYCC7S';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CORS
@@ -297,6 +298,44 @@ async function searchYouTubeCandidate(artist, track) {
     }
 }
 
+async function searchSoundCloudCandidate(artist, track) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 3000);
+
+    try {
+        const query = encodeURIComponent(`${artist} ${track}`.trim());
+        const response = await fetch(
+            `https://api-v2.soundcloud.com/search/tracks?q=${query}&client_id=${SOUNDCLOUD_CLIENT_ID}&limit=10`,
+            { signal: ctrl.signal }
+        );
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        const candidates = (data.collection || []).map(item => {
+            const progressive = (item.media?.transcodings || [])
+                .find(transcoding => transcoding.format?.protocol === 'progressive');
+            return {
+                id: String(item.id),
+                name: item.title,
+                title: item.title,
+                artist: item.user?.username || '',
+                primaryArtists: item.user?.username || '',
+                duration: Number(item.duration || 0) / 1000,
+                image: [{ url: item.artwork_url || item.user?.avatar_url || '', quality: '500x500' }],
+                resolverUrl: progressive?.url || '',
+                source: 'soundcloud'
+            };
+        }).filter(item => item.resolverUrl);
+
+        return selectBestCandidate(candidates, artist, track);
+    } catch (error) {
+        console.log('[instant-play] SoundCloud catalog search unavailable:', error.message);
+        return null;
+    } finally {
+        clearTimeout(tid);
+    }
+}
+
 async function quickSearch(artist, track) {
     let bestCandidate = null;
     let metadataConfirmedTrack = false;
@@ -327,6 +366,10 @@ async function quickSearch(artist, track) {
     }
 
     if (!bestCandidate) {
+        bestCandidate = await searchSoundCloudCandidate(artist, track);
+    }
+
+    if (!bestCandidate) {
         bestCandidate = await searchYouTubeCandidate(artist, track);
     }
 
@@ -344,11 +387,12 @@ async function quickSearch(artist, track) {
     });
 
     return {
-        source: best.source === 'youtube' ? 'youtube' : 'saavn',
+        source: ['youtube', 'soundcloud'].includes(best.source) ? best.source : 'saavn',
         videoId: best.id,
-        title: best.source === 'youtube' ? track : (best.name || best.title || track),
-        artist: best.source === 'youtube' ? artist : (artistInfo.full || artist),
-        thumbnail: best.image?.find(i => i.quality === '500x500')?.url || best.image?.[0]?.url || ''
+        title: ['youtube', 'soundcloud'].includes(best.source) ? track : (best.name || best.title || track),
+        artist: ['youtube', 'soundcloud'].includes(best.source) ? artist : (artistInfo.full || artist),
+        thumbnail: best.image?.find(i => i.quality === '500x500')?.url || best.image?.[0]?.url || '',
+        resolverUrl: best.resolverUrl || ''
     };
 }
 
@@ -483,6 +527,28 @@ async function getYouTubeAudioStream(videoId) {
     }
 }
 
+async function getSoundCloudAudioStream(resolverUrl) {
+    if (!resolverUrl?.startsWith('https://api-v2.soundcloud.com/')) return null;
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 2500);
+
+    try {
+        const separator = resolverUrl.includes('?') ? '&' : '?';
+        const response = await fetch(`${resolverUrl}${separator}client_id=${SOUNDCLOUD_CLIENT_ID}`, {
+            signal: ctrl.signal
+        });
+        if (!response.ok) return null;
+        const data = await response.json();
+        if (!data.url?.startsWith('https://')) return null;
+        return { audioUrl: data.url, quality: '128kbps' };
+    } catch (error) {
+        console.log('[instant-play] SoundCloud stream unavailable:', error.message);
+        return null;
+    } finally {
+        clearTimeout(tid);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // HANDLER PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -523,7 +589,9 @@ async function handler(req, res) {
     // PASO 2: Obtener stream de audio
     const streamResult = searchResult.source === 'youtube'
         ? await getYouTubeAudioStream(searchResult.videoId)
-        : await getAudioStream(searchResult.videoId);
+        : searchResult.source === 'soundcloud'
+            ? await getSoundCloudAudioStream(searchResult.resolverUrl)
+            : await getAudioStream(searchResult.videoId);
 
     if (!streamResult) {
         return res.status(404).json({
@@ -538,7 +606,12 @@ async function handler(req, res) {
     console.log(`[⚡ instant-play] ✅ Done in ${totalMs}ms`);
 
     // RESPUESTA EXITOSA
-    res.setHeader('Cache-Control', 'public, s-maxage=7200, stale-while-revalidate=3600');
+    res.setHeader(
+        'Cache-Control',
+        searchResult.source === 'soundcloud'
+            ? 'public, s-maxage=300, stale-while-revalidate=60'
+            : 'public, s-maxage=7200, stale-while-revalidate=3600'
+    );
     return res.status(200).json({
         success: true,
         audioUrl: streamResult.audioUrl,
