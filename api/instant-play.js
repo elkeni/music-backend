@@ -229,6 +229,33 @@ async function findExternalMetadata(artist, track) {
     }
 }
 
+async function searchYouTubeCandidate(artist, track) {
+    try {
+        const { createRequire } = await import('module');
+        const require = createRequire(import.meta.url);
+        const YouTube = require('youtube-sr').default || require('youtube-sr');
+        const videos = await YouTube.search(`${artist} ${track}`.trim(), {
+            limit: 5,
+            type: 'video',
+            safeSearch: true
+        });
+        const candidates = videos.map(video => ({
+            id: video.id,
+            name: video.title,
+            title: video.title,
+            artist: video.channel?.name || '',
+            primaryArtists: video.channel?.name || '',
+            duration: Number(video.duration || 0) / 1000,
+            image: [{ url: video.thumbnail?.url || '', quality: '500x500' }],
+            source: 'youtube'
+        }));
+        return selectBestCandidate(candidates, artist, track);
+    } catch (error) {
+        console.log('[instant-play] YouTube catalog search unavailable:', error.message);
+        return null;
+    }
+}
+
 async function quickSearch(artist, track) {
     let bestCandidate = null;
     let metadataConfirmedTrack = false;
@@ -259,10 +286,12 @@ async function quickSearch(artist, track) {
     }
 
     if (!bestCandidate) {
+        bestCandidate = await searchYouTubeCandidate(artist, track);
+    }
+
+    if (!bestCandidate) {
         console.log('[instant-play] ❌ No valid match found (Artist specific). Aborting.');
-        return {
-            failureCode: metadataConfirmedTrack ? 'AUDIO_SOURCE_UNAVAILABLE' : 'NO_MATCH'
-        };
+        return { failureCode: metadataConfirmedTrack ? 'AUDIO_SOURCE_UNAVAILABLE' : 'NO_MATCH' };
     }
 
     const best = bestCandidate;
@@ -274,9 +303,10 @@ async function quickSearch(artist, track) {
     });
 
     return {
+        source: best.source === 'youtube' ? 'youtube' : 'saavn',
         videoId: best.id,
-        title: best.name || best.title || track,
-        artist: artistInfo.full || artist, // Usar nombre limpio
+        title: best.source === 'youtube' ? track : (best.name || best.title || track),
+        artist: best.source === 'youtube' ? artist : (artistInfo.full || artist),
         thumbnail: best.image?.find(i => i.quality === '500x500')?.url || best.image?.[0]?.url || ''
     };
 }
@@ -329,6 +359,67 @@ async function getAudioStream(videoId) {
     }
 }
 
+/**
+ * Resuelve audio de YouTube con el cliente Android oficial de InnerTube. A
+ * diferencia del fallback anterior, este ID nunca se envía a Saavn.
+ */
+async function getYouTubeAudioStream(videoId) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 3000);
+    const apiKey = process.env.YOUTUBE_INNERTUBE_API_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+
+    try {
+        const response = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+            method: 'POST',
+            signal: ctrl.signal,
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 15) gzip',
+                'X-YouTube-Client-Name': '3',
+                'X-YouTube-Client-Version': '20.10.38'
+            },
+            body: JSON.stringify({
+                context: {
+                    client: {
+                        clientName: 'ANDROID',
+                        clientVersion: '20.10.38',
+                        androidSdkVersion: 35,
+                        hl: 'en',
+                        gl: 'US'
+                    }
+                },
+                videoId,
+                contentCheckOk: true,
+                racyCheckOk: true
+            })
+        });
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        if (data.playabilityStatus?.status !== 'OK') return null;
+
+        const formats = (data.streamingData?.adaptiveFormats || [])
+            .filter(format => format.url && /^audio\//i.test(format.mimeType || ''))
+            .filter(format => Number(format.bitrate || 0) >= 96000)
+            .sort((left, right) => {
+                const leftMp4 = /audio\/mp4/i.test(left.mimeType || '') ? 0 : 1;
+                const rightMp4 = /audio\/mp4/i.test(right.mimeType || '') ? 0 : 1;
+                return leftMp4 - rightMp4 || Number(left.bitrate) - Number(right.bitrate);
+            });
+        if (formats.length === 0) return null;
+
+        return {
+            audioUrl: formats[0].url,
+            quality: `${Math.round(Number(formats[0].bitrate) / 1000)}kbps`
+        };
+    } catch (error) {
+        console.log('[instant-play] YouTube stream unavailable:', error.message);
+        return null;
+    } finally {
+        clearTimeout(tid);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // HANDLER PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -367,7 +458,9 @@ async function handler(req, res) {
     }
 
     // PASO 2: Obtener stream de audio
-    const streamResult = await getAudioStream(searchResult.videoId);
+    const streamResult = searchResult.source === 'youtube'
+        ? await getYouTubeAudioStream(searchResult.videoId)
+        : await getAudioStream(searchResult.videoId);
 
     if (!streamResult) {
         return res.status(404).json({
@@ -391,7 +484,8 @@ async function handler(req, res) {
             title: searchResult.title,
             artist: searchResult.artist,
             thumbnail: searchResult.thumbnail,
-            videoId: searchResult.videoId
+            videoId: searchResult.videoId,
+            source: searchResult.source
         },
         ms: totalMs
     });
