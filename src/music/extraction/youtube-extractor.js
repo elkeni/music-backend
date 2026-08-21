@@ -16,6 +16,7 @@
 
 import { normalizeText, normalizeArtist } from '../normalization/normalize-text.js';
 import { cleanTitle } from '../normalization/clean-title.js';
+import { calculateStringSimilarity } from './string-similarity.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // VERSIONES PROHIBIDAS VS PERMITIDAS
@@ -364,233 +365,186 @@ export function extractFeats(title) {
  * @param {string} targetTitle - Título buscado
  * @returns {{ passed: boolean, titleScore: number, artistScore: number, combinedScore: number }}
  */
+/**
+ * Elimina sufijos propios del canal, no del artista musical.
+ */
+function normalizeArtistForMatching(value) {
+    return normalizeText(value)
+        .replace(/\b(official|oficial|vevo|topic|canal oficial|official channel|records?|music)\b\s*$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * Limpia descriptores editoriales o de formato sin borrar palabras musicales
+ * arbitrarias del título. La versión se valida por separado sobre el título raw.
+ */
+function normalizeTitleForMatching(value) {
+    const cleaned = cleanTitle(value || '')
+        .replace(/[\[(]\s*(salsa|cumbia|bachata|merengue|reggaeton)?\s*(version|versi[oó]n)?\s*[\])]/gi, '')
+        .replace(/[\[(][^\])]*\b(remix|remaster(?:ed)?|radio\s+edit|extended\s+mix|original\s+mix)\b[^\])]*[\])]/gi, '')
+        .replace(/[\[(]\s*(concierto\s+)?(en\s+vivo|live)(\s+(at|from|in)\s+[^\])]+)?\s*[\])]/gi, '')
+        .replace(/\s*[|]\s*(official|oficial)?\s*(audio|video|lyrics?|letra|visualizer).*$/gi, '')
+        .replace(/\s*[|]\s*(audio|video)\s*(official|oficial).*$/gi, '')
+        .replace(/\b(audio|video)\s*(official|oficial)\s*\d{0,4}\s*$/gi, '')
+        .replace(/\b(official|oficial)\s*(audio|video)\s*\d{0,4}\s*$/gi, '')
+        .replace(/\b(lyrics?|letra|visualizer)\s*(official|oficial)?\s*$/gi, '')
+        .replace(/\b(remaster(?:ed)?|remix|radio\s+edit|extended\s+mix|original\s+mix)\b/gi, '')
+        .replace(/\b(salsa|cumbia|bachata|merengue)\s+version\b/gi, '')
+        .replace(/\b(en\s+vivo|live)\s*$/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const normalized = normalizeText(cleaned);
+    return normalized || normalizeText(cleanTitle(value || ''));
+}
+
+function matchTypeForScore(score, hasTarget) {
+    if (!hasTarget) return 'no_target';
+    if (score >= 0.995) return 'exact';
+    if (score >= 0.90) return 'near_exact';
+    if (score >= 0.80) return 'high_similarity';
+    if (score >= 0.60) return 'partial';
+    return 'none';
+}
+
+function getFieldThreshold(normalizedValue, field) {
+    const tokens = normalizedValue.split(' ').filter(Boolean);
+
+    if (field === 'artist') {
+        if (tokens.length === 1 && normalizedValue.length <= 4) return 0.94;
+        if (tokens.length === 1) return 0.84;
+        return 0.82;
+    }
+
+    if (tokens.length === 1 && normalizedValue.length <= 4) return 0.94;
+    if (tokens.length === 1) return 0.84;
+    if (tokens.length === 2) return 0.82;
+    return 0.78;
+}
+
+function inferArtistAndTitle(rawTitle, targetArtistNorm) {
+    const fallback = { inferredArtist: '', inferredTitle: rawTitle || '' };
+    if (!rawTitle || !targetArtistNorm) return fallback;
+
+    const parts = rawTitle.split(/\s+[-:|]\s+/).map(part => part.trim()).filter(Boolean);
+    if (parts.length < 2) return fallback;
+
+    const first = normalizeArtistForMatching(parts[0]);
+    const last = normalizeArtistForMatching(parts[parts.length - 1]);
+    const firstScore = calculateStringSimilarity(first, targetArtistNorm).score;
+    const lastScore = calculateStringSimilarity(last, targetArtistNorm).score;
+
+    if (firstScore >= 0.78) {
+        return { inferredArtist: parts[0], inferredTitle: parts.slice(1).join(' ') };
+    }
+    if (lastScore >= 0.78) {
+        return { inferredArtist: parts[parts.length - 1], inferredTitle: parts.slice(0, -1).join(' ') };
+    }
+
+    return fallback;
+}
+
+/**
+ * Matching primario v2.
+ *
+ * Artista y título son condiciones independientes: un artista perfecto ya no
+ * puede compensar una canción diferente, ni un título exacto puede compensar
+ * un artista irrelevante. El score combinado sirve para ordenar, no para eludir
+ * esos bloqueos.
+ */
 export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
-    const result = {
-        passed: false,
-        titleScore: 0,
-        artistScore: 0,
-        combinedScore: 0,
-        titleMatch: 'none',
-        artistMatch: 'none'
+    const rawTitle = candidate?.name || candidate?.title || '';
+    const targetArtistNorm = normalizeArtistForMatching(targetArtist || '');
+    const targetTitleNorm = normalizeTitleForMatching(targetTitle || '');
+    const inferred = inferArtistAndTitle(rawTitle, targetArtistNorm);
+    const candidateTitleNorm = normalizeTitleForMatching(inferred.inferredTitle);
+
+    const artistInfo = extractArtistInfo(candidate);
+    const artistVariants = [
+        artistInfo.primary,
+        artistInfo.full,
+        ...artistInfo.collaborators,
+        inferred.inferredArtist
+    ].map(normalizeArtistForMatching).filter(Boolean);
+
+    let bestArtist = {
+        score: targetArtistNorm ? 0 : 0.5,
+        levenshtein: 0,
+        tokenPrecision: 0,
+        tokenRecall: 0,
+        tokenF1: 0,
+        value: ''
     };
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // FASE 2: NORMALIZACIÓN SIMÉTRICA (MEJORADA PARA LATAM)
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Aplicamos cleanTitle + cleanSpanishTitle local
-    const rawCandTitle = candidate.name || candidate.title || '';
-
-    // FIX: Eliminar el artista del título si aparece al inicio (común en YouTube)
-    // ESTRATEGIA: Detectar separadores " - " antes de normalizar
-    let cleanRawTitle = rawCandTitle;
-
-    // Separadores fuertes: " - ", " : ", " | "
-    const separatorRegex = /\s+[-:|]\s+/;
-    if (targetArtist && separatorRegex.test(rawCandTitle)) {
-        const parts = rawCandTitle.split(separatorRegex);
-        // Solo si hay 2 o 3 partes (Artist - Title) o (Artist - Title - Official)
-        if (parts.length >= 2) {
-            const p0 = normalizeText(parts[0]);
-            const pLast = normalizeText(parts[parts.length - 1]);
-            const targetSimple = normalizeText(targetArtist);
-
-            // Caso 1: "Artist... - Title" (Prefijo)
-            // Verificamos si la primera parte CONTIENE al artista buscado
-            if (p0.includes(targetSimple) || targetSimple.includes(p0)) {
-                // Asumimos que todo lo que sigue es el título
-                cleanRawTitle = parts.slice(1).join(' ');
-            }
-            // Caso 2: "Title - Artist" (Sufijo)
-            else if (pLast.includes(targetSimple) || targetSimple.includes(pLast)) {
-                cleanRawTitle = parts.slice(0, parts.length - 1).join(' ');
-            }
-        }
-    }
-
-    let candTitle = normalizeText(cleanSpanishTitle(cleanTitle(cleanRawTitle)));
-    const candArtist = normalizeArtist(extractArtistInfo(candidate).primary);
-
-    // Fallback: Si la limpieza por separador no funcionó (o no había separador), 
-    // intentamos quitar el artista del inicio del string normalizado.
-    if (targetArtist) {
-        const artistSimple = normalizeText(targetArtist);
-        if (artistSimple.length > 0 && candTitle.startsWith(artistSimple)) {
-            const remainder = candTitle.replace(artistSimple, '').trim();
-            if (remainder.length > 0) {
-                candTitle = remainder;
-            }
-        }
-    }
-
-    // normalizar target completo
-    const targetTitleFullNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitle || '')));
-    const targetArtistNorm = normalizeArtist(targetArtist || '');
-
-    // normalizar target "main" (sin paréntesis)
-    // Ej: "Voltage (See You Again)" -> "Voltage"
-    let targetTitleMainRaw = targetTitle || '';
-    if (targetTitleMainRaw.includes('(') || targetTitleMainRaw.includes('[')) {
-        targetTitleMainRaw = targetTitleMainRaw.replace(/[\(\[].*?[\)\]]/g, '');
-    }
-    const targetTitleMainNorm = normalizeText(cleanSpanishTitle(cleanTitle(targetTitleMainRaw)));
-
-    // HELPER: Limpiar spam de versiones para comparar "Esencia vs Esencia"
-    // Ahora incluye "en vivo", "concierto", "live" para que la excepción peruana funcione con scores altos
-    const removeVersionSpam = (t) => t ? t.replace(/\b(remaster|remastered|remix|mix|radio edit|extended|version|edit|vivo|en vivo|concierto|live)\b/gi, '').replace(/\s+/g, ' ').trim() : '';
-
-    const candTitleBase = removeVersionSpam(candTitle);
-
-    // FUNCIÓN DE SIMILITUD ESTRICTA (0 - 1.0)
-    const calculateStrictScore = (cand, target) => {
-        if (!cand || !target) return 0;
-        if (cand === target) return 1.0;
-
-        // Si uno contiene al otro, penalizar por longitud extra (basura / palabras extra)
-        // Ejemplo: Target="Hello" (5), Cand="Hello Live" (10) -> Score 0.5
-        if (cand.includes(target)) {
-            return target.length / cand.length;
-        }
-        if (target.includes(cand)) {
-            return cand.length / target.length;
-        }
-
-        // Palabras compartidas (Jaccard simple ponderado)
-        const candWords = cand.split(' ').filter(w => w.length > 1);
-        const targetWords = target.split(' ').filter(w => w.length > 1);
-        if (targetWords.length === 0 || candWords.length === 0) return 0;
-
-        const intersection = targetWords.filter(w => candWords.includes(w));
-        // Penalizar fuertemente si hay menos palabras o más palabras de las necesarias
-        const union = new Set([...candWords, ...targetWords]).size;
-
-        return intersection.length / union;
-    };
-
-    // Usaremos la lógica de matching para ambos y nos quedamos con el mejor resultado
-    const evaluateTitleAgainst = (targetNorm) => {
-        if (!targetNorm) return { score: 0, match: 'none' };
-
-        let score = calculateStrictScore(candTitle, targetNorm);
-
-        // 🧠 RESCATE INTELIGENTE (Base Identity):
-        // Si falla la comparación directa, probamos comparando las versiones LIMPIAS (sin remix/remaster).
-        // Esto permite que "Song (Remaster)" haga match con "Song".
-        if (score < 0.85) {
-            const targetBase = removeVersionSpam(targetNorm);
-            // Solo aplicar si los títulos base no quedaron vacíos
-            if (candTitleBase.length > 1 && targetBase.length > 1) {
-                const baseScore = calculateStrictScore(candTitleBase, targetBase);
-
-                // Si la comparación base es excelente, la usamos.
-                // Penalizamos ligeramente (0.98) para que un match EXACTO real gane prioridad si existe.
-                if (baseScore > score) {
-                    score = Math.max(score, baseScore * 0.98);
-                }
-            }
-        }
-
-        // 🧠 RESCATE FT/FEAT (Sin paréntesis)
-        // YouTube a veces pone "Song Name ft. Artist" sin paréntesis.
-        // Si el score es bajo, intentamos limpiar "ft." manual si no se hizo antes.
-        if (score < 0.9 && (candTitle.includes(' ft. ') || candTitle.includes(' feat. '))) {
-            const cleanFeat = candTitle.replace(/\s+(ft\.|feat\.)\s+.*$/i, '').trim();
-            if (cleanFeat.length > 1) {
-                const featScore = calculateStrictScore(cleanFeat, targetNorm);
-                if (featScore > score) {
-                    score = Math.max(score, featScore * 0.95);
-                }
-            }
-        }
-
-
-        let matchType = 'none';
-        if (score === 1.0) matchType = 'exact';
-        else if (score >= 0.95) matchType = 'near_exact'; // Cumple criterio 95%
-        else if (score >= 0.8) matchType = 'high_similarity';
-        else if (score >= 0.5) matchType = 'partial';
-
-        // Logica legacy de palabras clave para fallback (solo si score es bajo pero tiene palabras clave)
-        // Por ahora confiamos en el score estricto
-
-        return { score, match: matchType };
-    };
-
-    // Calcular scores
-    const resFull = evaluateTitleAgainst(targetTitleFullNorm);
-    const resMain = (targetTitleMainNorm && targetTitleMainNorm !== targetTitleFullNorm)
-        ? evaluateTitleAgainst(targetTitleMainNorm)
-        : { score: 0, match: 'none' };
-
-    // Quedarse con el mejor
-    if (resMain.score > resFull.score) {
-        result.titleScore = resMain.score;
-        result.titleMatch = resMain.match;
-    } else {
-        result.titleScore = resFull.score;
-        result.titleMatch = resFull.match;
-    }
-
-    if (!result.titleMatch || result.titleMatch === 'none') {
-        // Fallback si nada matcheó
-        if (!targetTitleFullNorm) {
-            result.titleScore = 0.5;
-            result.titleMatch = 'no_target';
-        }
-    }
-
-    // ARTISTA (más importante que título)
     if (targetArtistNorm) {
-        const artistInfo = extractArtistInfo(candidate);
-        const allArtists = [artistInfo.primary, ...artistInfo.collaborators].map(a => normalizeText(a));
-        const candArtistFull = normalizeArtist(artistInfo.full);
-
-        if (candArtist === targetArtistNorm) {
-            result.artistScore = 1.0;
-            result.artistMatch = 'exact';
-        } else if (candArtistFull === targetArtistNorm) {
-            // MATCH EXACTO DEL NOMBRE COMPLETO (Recuperación de splits incorrectos)
-            // Ej: "Tyler, The Creator" -> Split ["Tyler", "The Creator"]
-            // candArtist="tyler", candArtistFull="tyler the creator" == target="tyler the creator"
-            result.artistScore = 1.0;
-            result.artistMatch = 'exact_full';
-        } else if (candArtist.includes(targetArtistNorm)) {
-            // Penalizar longitud extra en artista tambien
-            // Ej: Target="Artist", Cand="Artist Vevo" -> Score alto
-            // Ej: Target="Artist", Cand="Artist & Other" -> Score medio
-            // Ej: Target="Artist", Cand="Artist Tribute Band" -> Score bajo (manejado arriba, pero aqui tambien por ratio)
-            const ratio = targetArtistNorm.length / candArtist.length;
-            result.artistScore = ratio >= 0.9 ? 0.95 : ratio;
-            result.artistMatch = 'contains';
-        } else if (targetArtistNorm.includes(candArtist)) {
-            const ratio = candArtist.length / targetArtistNorm.length;
-            result.artistScore = ratio >= 0.9 ? 0.95 : ratio;
-            result.artistMatch = 'contains_reverse';
-        } else if (allArtists.some(a => a.includes(targetArtistNorm) || targetArtistNorm.includes(a))) {
-            result.artistScore = 0.90; // Colaborador directo encontrado
-            result.artistMatch = 'collaborator';
-        } else {
-            const targetWords = targetArtistNorm.split(' ').filter(w => w.length > 2);
-            const candWords = candArtist.split(' ');
-            const matched = targetWords.filter(w => candWords.some(cw => cw.includes(w)));
-            const ratio = matched.length / Math.max(targetWords.length, 1);
-            result.artistScore = ratio * 0.8;
-            result.artistMatch = ratio >= 0.5 ? 'partial' : 'none';
+        for (const variant of new Set(artistVariants)) {
+            const similarity = calculateStringSimilarity(variant, targetArtistNorm);
+            if (similarity.score > bestArtist.score) {
+                bestArtist = { ...similarity, value: variant };
+            }
         }
-    } else {
-        result.artistScore = 0.5;
-        result.artistMatch = 'no_target';
     }
 
-    // DECISIÓN (artist centric, relajada)
-    result.combinedScore = (result.artistScore * 0.6) + (result.titleScore * 0.4);
+    const titleSimilarity = targetTitleNorm
+        ? calculateStringSimilarity(candidateTitleNorm, targetTitleNorm)
+        : { score: 0.5, levenshtein: 0, tokenPrecision: 0, tokenRecall: 0, tokenF1: 0 };
 
-    // CRITERIOS DE PASO RELAJADOS (Más resultados)
-    result.passed =
-        result.artistScore >= 0.75 || // Era 0.8
-        result.combinedScore >= 0.45 || // Era 0.5
-        (result.artistScore >= 0.55 && result.titleScore >= 0.35); // Era 0.6 y 0.4
+    const titleThreshold = targetTitleNorm ? getFieldThreshold(targetTitleNorm, 'title') : 0;
+    let artistThreshold = targetArtistNorm ? getFieldThreshold(targetArtistNorm, 'artist') : 0;
 
-    return result;
+    // Un título prácticamente exacto permite ruido moderado de canal en artistas
+    // compuestos, pero nunca elimina por completo la validación de artista.
+    if (targetArtistNorm.includes(' ') && titleSimilarity.score >= 0.94) {
+        artistThreshold = Math.min(artistThreshold, 0.78);
+    }
+
+    const titlePassed = !targetTitleNorm || titleSimilarity.score >= titleThreshold;
+    const artistPassed = !targetArtistNorm || bestArtist.score >= artistThreshold;
+
+    let combinedScore;
+    if (targetArtistNorm && targetTitleNorm) {
+        combinedScore = (titleSimilarity.score * 0.58) + (bestArtist.score * 0.42);
+    } else if (targetTitleNorm) {
+        combinedScore = titleSimilarity.score;
+    } else if (targetArtistNorm) {
+        combinedScore = bestArtist.score;
+    } else {
+        combinedScore = 0.5;
+    }
+
+    return {
+        passed: titlePassed && artistPassed,
+        titleScore: titleSimilarity.score,
+        artistScore: bestArtist.score,
+        combinedScore,
+        titleMatch: matchTypeForScore(titleSimilarity.score, !!targetTitleNorm),
+        artistMatch: matchTypeForScore(bestArtist.score, !!targetArtistNorm),
+        thresholds: {
+            title: titleThreshold,
+            artist: artistThreshold
+        },
+        gates: {
+            titlePassed,
+            artistPassed
+        },
+        normalized: {
+            targetTitle: targetTitleNorm,
+            candidateTitle: candidateTitleNorm,
+            targetArtist: targetArtistNorm,
+            candidateArtist: bestArtist.value
+        },
+        metrics: {
+            title: titleSimilarity,
+            artist: {
+                score: bestArtist.score,
+                levenshtein: bestArtist.levenshtein,
+                tokenPrecision: bestArtist.tokenPrecision,
+                tokenRecall: bestArtist.tokenRecall,
+                tokenF1: bestArtist.tokenF1
+            }
+        }
+    };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -650,6 +604,20 @@ export function evaluateMusicalContext(candidate, targetDuration, targetAlbum) {
     return result;
 }
 
+function isLikelyMultiTrack(candidateTitle, targetTitle) {
+    const raw = String(candidateTitle || '');
+    if (!/[\/]/.test(raw)) return false;
+    if (/\b(mix|medley|enganchad[oa]s?|compilation|full\s+album|mixes)\b/i.test(targetTitle || '')) return false;
+
+    const segments = raw.split(/\s+[\/]\s+/).map(normalizeText).filter(Boolean);
+    if (segments.length < 2) return false;
+
+    const trailingSegment = segments[segments.length - 1];
+    const isEditorialSuffix = /^(official|oficial)?\s*(audio|video|lyrics?|letra|visualizer)(\s+\d{4})?$/.test(trailingSegment);
+
+    return !isEditorialSuffix && /\b(mix|medley|enganchad[oa]s?|pegadit[oa]s?)\b/i.test(raw);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // EVALUACIÓN COMPLETA
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -676,13 +644,24 @@ export function evaluateCandidate(candidate, params) {
         };
     }
 
+    if (isLikelyMultiTrack(candidate.name || candidate.title || '', targetTitle)) {
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'multi_song_title_detected',
+            scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
+            version: null,
+            feats: []
+        };
+    }
+
     // FASE 2: VERSIÓN PROHIBIDA
     const version = detectVersion(candidate.name || candidate.title || '');
 
     if (version.isForbidden) {
         // EXCEPCIÓN: Si el usuario busca explícitamente "En Vivo" o "Live", permitimos la versión
         const targetWantsLive = /\b(live|en\s*vivo|concierto|vivo|directo)\b/i.test(targetTitle || '');
-        let isLiveException = targetWantsLive && (version.type === 'live' || version.type === 'cover');
+        let isLiveException = targetWantsLive && version.type === 'live';
 
         // 🇵🇪 EXCEPCIÓN PERÚ (Cumbia/Salsa Friendly):
         // Permitimos versiones en vivo para artistas de cumbia/salsa donde el hit suele ser en vivo.
@@ -728,10 +707,12 @@ export function evaluateCandidate(candidate, params) {
 
     const targetWantsRemix = /\bremix\b/i.test(targetLower);
     const targetWantsRemaster = /\bremaster/i.test(targetLower);
+    const targetWantsLive = /\b(live|en\s*vivo|concierto|directo)\b/i.test(targetLower);
 
     // Para remix: verificar detectVersion O que el título contenga 'remix'
     const candidateIsRemix = version.type === 'remix' || /\bremix\b/i.test(candTitleLower);
     const candidateIsRemaster = version.type === 'remaster' || /\bremaster/i.test(candTitleLower);
+    const candidateIsLive = version.type === 'live';
 
     if (targetWantsRemix && !candidateIsRemix) {
         return {
@@ -749,6 +730,17 @@ export function evaluateCandidate(candidate, params) {
             passed: false,
             rejected: true,
             rejectReason: 'version_mismatch:wanted_remaster',
+            scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
+            version,
+            feats: []
+        };
+    }
+
+    if (targetWantsLive && !candidateIsLive) {
+        return {
+            passed: false,
+            rejected: true,
+            rejectReason: 'version_mismatch:wanted_live',
             scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
             version,
             feats: []
@@ -821,77 +813,40 @@ export function evaluateCandidate(candidate, params) {
         (context.albumScore * weights.album)
     ) / currentTotal;
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 🔐 FASE A: HARD TITLE CONSTRAINT (HTC) - ULTRA ESTRICTO
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // Artista y título son gates independientes. Nunca se compensan entre sí.
     const hasTargetTitle = !!(targetTitle && targetTitle.trim());
-
-    if (hasTargetTitle) {
-        // 🔐 MATCHING ADAPTATIVO 2.0:
-        // El usuario quiere "exacto" pero que "encuentre todo".
-        // ESTRATEGIA: Si el Artista es INDISCUTIBLEMENTE el correcto, permitimos variaciones menores en el título.
-        // Si el Artista es solo un "match parcial", exigimos perfección en el título.
-
-        const artistIsPerfect = identity.artistMatch === 'exact' || identity.artistMatch === 'exact_full';
-
-        // Umbral dinámico:
-        // - Artista Perfecto: 80% match en título (tolera más diferencias)
-        // - Artista Dudoso:   88% match en título (tolera pequeñas diferencias)
-        const titleThreshold = artistIsPerfect ? 0.80 : 0.88;
-
-        const isTitleAcceptable =
-            identity.titleMatch === 'exact' ||
-            identity.titleMatch === 'near_exact' ||
-            identity.titleScore >= titleThreshold;
-
-        if (!isTitleAcceptable) {
-            return {
-                passed: false,
-                rejected: true,
-                rejectReason: `title_mismatch_strict (score: ${identity.titleScore.toFixed(2)} < required: ${titleThreshold})`,
-                scores: {
-                    identityScore: Math.round(identityScore * 100) / 100,
-                    versionScore: Math.round(versionScore * 100) / 100,
-                    durationScore: Math.round(durationScore * 100) / 100,
-                    albumScore: Math.round(context.albumScore * 100) / 100,
-                    finalConfidence: 0
-                },
-                version,
-                feats: extractFeats(candidate.name || candidate.title || ''),
-                details: { identity, context }
-            };
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 🏆 FASE B: SCORING / UMBRAL FINAL
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    let passed;
-    if (hasTargetTitle) {
-        // MODO ULTRA ESTRICTO RELAJADO 2.0: 
-        // 1. Identity Score debe ser >= 0.85 (antes 0.90)
-        // 2. Y el score de artista debe ser también muy alto (>= 0.9)
-        passed = (identityScore >= 0.88 && identity.artistScore >= 0.90);
-    } else {
-        passed = identity.passed ||
-            identityScore >= 0.35 ||
-            (identityScore >= 0.25 && durationScore >= 0.7);
-    }
+    const hasTargetArtist = !!(targetArtist && targetArtist.trim());
 
     const feats = extractFeats(candidate.name || candidate.title || '');
 
+    let rejectReason = null;
+    if (hasTargetTitle && !identity.gates.titlePassed) {
+        rejectReason = `same_artist_different_track:title_${identity.titleScore.toFixed(2)}_required_${identity.thresholds.title.toFixed(2)}`;
+    } else if (hasTargetArtist && !identity.gates.artistPassed) {
+        rejectReason = `artist_mismatch:artist_${identity.artistScore.toFixed(2)}_required_${identity.thresholds.artist.toFixed(2)}`;
+    } else if (targetDuration > 0 && candidate.duration > 0) {
+        const maximumSafeDifference = Math.max(75, Number(targetDuration) * 0.30);
+        if (context.durationDiff > maximumSafeDifference) {
+            rejectReason = `duration_mismatch:diff_${context.durationDiff}s`;
+        }
+    }
+
+    // Sin título específico se mantiene el modo de descubrimiento, pero si se
+    // proporcionó artista sigue siendo obligatorio superar su gate.
+    const passed = hasTargetTitle
+        ? !rejectReason && identity.passed
+        : !rejectReason && (!hasTargetArtist || identity.gates.artistPassed);
+
     return {
         passed,
-        rejected: false,
-        rejectReason: null,
+        rejected: !passed,
+        rejectReason,
         scores: {
             identityScore: Math.round(identityScore * 100) / 100,
             versionScore: Math.round(versionScore * 100) / 100,
             durationScore: Math.round(durationScore * 100) / 100,
             albumScore: Math.round(context.albumScore * 100) / 100,
-            finalConfidence: Math.round(finalConfidence * 100) / 100
+            finalConfidence: passed ? Math.round(finalConfidence * 100) / 100 : 0
         },
         version,
         feats,

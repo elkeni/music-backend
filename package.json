@@ -8,7 +8,8 @@
   },
   "scripts": {
     "dev": "vercel dev",
-    "start": "vercel dev"
+    "start": "vercel dev",
+    "test:matching": "node src/music/tests/matching-regression-tests.js"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
