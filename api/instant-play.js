@@ -406,53 +406,75 @@ async function getAudioStream(videoId) {
  */
 async function getYouTubeAudioStream(videoId) {
     const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), 3000);
+    const tid = setTimeout(() => ctrl.abort(), 4500);
     const apiKey = process.env.YOUTUBE_INNERTUBE_API_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+    const clients = [
+        {
+            id: '3',
+            userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 15) gzip',
+            context: {
+                clientName: 'ANDROID',
+                clientVersion: '20.10.38',
+                androidSdkVersion: 35,
+                hl: 'en',
+                gl: 'US'
+            }
+        },
+        {
+            id: '5',
+            userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X)',
+            context: {
+                clientName: 'IOS',
+                clientVersion: '20.10.4',
+                deviceMake: 'Apple',
+                deviceModel: 'iPhone16,2',
+                osName: 'iPhone',
+                osVersion: '18.3.1.22D72',
+                hl: 'en',
+                gl: 'US'
+            }
+        }
+    ];
 
     try {
-        const response = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
-            method: 'POST',
-            signal: ctrl.signal,
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 15) gzip',
-                'X-YouTube-Client-Name': '3',
-                'X-YouTube-Client-Version': '20.10.38'
-            },
-            body: JSON.stringify({
-                context: {
-                    client: {
-                        clientName: 'ANDROID',
-                        clientVersion: '20.10.38',
-                        androidSdkVersion: 35,
-                        hl: 'en',
-                        gl: 'US'
-                    }
+        for (const client of clients) {
+            const response = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+                method: 'POST',
+                signal: ctrl.signal,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'User-Agent': client.userAgent,
+                    'X-YouTube-Client-Name': client.id,
+                    'X-YouTube-Client-Version': client.context.clientVersion
                 },
-                videoId,
-                contentCheckOk: true,
-                racyCheckOk: true
-            })
-        });
-        if (!response.ok) return null;
-
-        const data = await response.json();
-        if (data.playabilityStatus?.status !== 'OK') return null;
-
-        const formats = (data.streamingData?.adaptiveFormats || [])
-            .filter(format => format.url && /^audio\//i.test(format.mimeType || ''))
-            .filter(format => Number(format.bitrate || 0) >= 96000)
-            .sort((left, right) => {
-                const leftMp4 = /audio\/mp4/i.test(left.mimeType || '') ? 0 : 1;
-                const rightMp4 = /audio\/mp4/i.test(right.mimeType || '') ? 0 : 1;
-                return leftMp4 - rightMp4 || Number(left.bitrate) - Number(right.bitrate);
+                body: JSON.stringify({
+                    context: { client: client.context },
+                    videoId,
+                    contentCheckOk: true,
+                    racyCheckOk: true
+                })
             });
-        if (formats.length === 0) return null;
+            if (!response.ok) continue;
 
-        return {
-            audioUrl: formats[0].url,
-            quality: `${Math.round(Number(formats[0].bitrate) / 1000)}kbps`
-        };
+            const data = await response.json();
+            if (data.playabilityStatus?.status !== 'OK') continue;
+
+            const formats = (data.streamingData?.adaptiveFormats || [])
+                .filter(format => format.url && /^audio\//i.test(format.mimeType || ''))
+                .filter(format => Number(format.bitrate || 0) >= 96000)
+                .sort((left, right) => {
+                    const leftMp4 = /audio\/mp4/i.test(left.mimeType || '') ? 0 : 1;
+                    const rightMp4 = /audio\/mp4/i.test(right.mimeType || '') ? 0 : 1;
+                    return leftMp4 - rightMp4 || Number(left.bitrate) - Number(right.bitrate);
+                });
+            if (formats.length === 0) continue;
+
+            return {
+                audioUrl: formats[0].url,
+                quality: `${Math.round(Number(formats[0].bitrate) / 1000)}kbps`
+            };
+        }
+        return null;
     } catch (error) {
         console.log('[instant-play] YouTube stream unavailable:', error.message);
         return null;
