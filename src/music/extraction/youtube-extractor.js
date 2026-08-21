@@ -441,13 +441,22 @@ function inferArtistAndTitle(rawTitle, targetArtistNorm) {
     const parts = rawTitle.split(/\s+[-:|]\s+/).map(part => part.trim()).filter(Boolean);
     if (parts.length < 2) return fallback;
 
-    const first = normalizeArtistForMatching(parts[0]);
-    const last = normalizeArtistForMatching(parts[parts.length - 1]);
+    const cleanInferredArtist = value => String(value || '')
+        .replace(/\b(feat(?:uring)?|ft\.?|con|with)\b.*$/i, '')
+        .trim();
+    const first = normalizeArtistForMatching(cleanInferredArtist(parts[0]));
+    const last = normalizeArtistForMatching(cleanInferredArtist(parts[parts.length - 1]));
     const firstScore = calculateStringSimilarity(first, targetArtistNorm).score;
     const lastScore = calculateStringSimilarity(last, targetArtistNorm).score;
 
     if (firstScore >= 0.78) {
-        return { inferredArtist: parts[0], inferredTitle: parts.slice(1).join(' ') };
+        const remaining = parts.slice(1);
+        const trailingIsEditorial = remaining.length > 1
+            && /^(?:\d+\s*)?(?:a[nñ]os?|aniversario|official|oficial|audio|video)$/i.test(remaining.at(-1));
+        return {
+            inferredArtist: cleanInferredArtist(parts[0]),
+            inferredTitle: trailingIsEditorial ? remaining.slice(0, -1).join(' ') : remaining.join(' ')
+        };
     }
     if (lastScore >= 0.78) {
         return { inferredArtist: parts[parts.length - 1], inferredTitle: parts.slice(0, -1).join(' ') };

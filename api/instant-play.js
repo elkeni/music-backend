@@ -24,12 +24,16 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
+import { createHmac, randomBytes } from 'node:crypto';
 import { evaluateCandidate, extractArtistInfo } from '../src/music/extraction/youtube-extractor.js';
 
 export const config = { runtime: 'nodejs' };
 
 const SOURCE_API = process.env.SOURCE_API_URL || 'https://appmusic-phi.vercel.app';
 const SOUNDCLOUD_CLIENT_ID = process.env.SOUNDCLOUD_CLIENT_ID || '0dqfiN6c3Y9idZWFzMMulqPjotmYCC7S';
+const AUDIOMACK_API = 'https://api.audiomack.com/v1/';
+const AUDIOMACK_CONSUMER_KEY = process.env.AUDIOMACK_CONSUMER_KEY || 'audiomack-web';
+const AUDIOMACK_CONSUMER_SECRET = process.env.AUDIOMACK_CONSUMER_SECRET || 'bd8a07e9f23fbe9d808646b730f89b8e';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CORS
@@ -336,6 +340,108 @@ async function searchSoundCloudCandidate(artist, track) {
     }
 }
 
+function encodeOAuthValue(value) {
+    return encodeURIComponent(String(value))
+        .replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function buildAudiomackAuthorization(method, url) {
+    const oauth = {
+        oauth_consumer_key: AUDIOMACK_CONSUMER_KEY,
+        oauth_nonce: randomBytes(16).toString('hex'),
+        oauth_signature_method: 'HMAC-SHA1',
+        oauth_timestamp: String(Math.floor(Date.now() / 1000)),
+        oauth_version: '1.0'
+    };
+    const signatureParams = [
+        ...url.searchParams.entries(),
+        ...Object.entries(oauth)
+    ].sort((left, right) => {
+        const keyOrder = encodeOAuthValue(left[0]).localeCompare(encodeOAuthValue(right[0]));
+        return keyOrder || encodeOAuthValue(left[1]).localeCompare(encodeOAuthValue(right[1]));
+    });
+    const normalizedParams = signatureParams
+        .map(([key, value]) => `${encodeOAuthValue(key)}=${encodeOAuthValue(value)}`)
+        .join('&');
+    const signatureBase = [
+        method.toUpperCase(),
+        encodeOAuthValue(`${url.origin}${url.pathname}`),
+        encodeOAuthValue(normalizedParams)
+    ].join('&');
+    oauth.oauth_signature = createHmac('sha1', `${AUDIOMACK_CONSUMER_SECRET}&`)
+        .update(signatureBase)
+        .digest('base64');
+
+    return `OAuth ${Object.entries(oauth)
+        .map(([key, value]) => `${encodeOAuthValue(key)}="${encodeOAuthValue(value)}"`)
+        .join(', ')}`;
+}
+
+async function fetchAudiomack(path, params = {}, signal) {
+    const url = new URL(path, AUDIOMACK_API);
+    for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== null && value !== '') {
+            url.searchParams.set(key, String(value));
+        }
+    }
+    return fetch(url, {
+        signal,
+        headers: {
+            Accept: 'application/json',
+            Authorization: buildAudiomackAuthorization('GET', url)
+        }
+    });
+}
+
+async function searchAudiomackCandidate(artist, track) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 3500);
+    const compactTrack = String(track || '')
+        .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+        .replace(/\s*[/|]\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const queries = [...new Set([
+        `${artist} ${track}`.trim(),
+        `${artist} ${compactTrack}`.trim(),
+        compactTrack
+    ].filter(Boolean))];
+
+    try {
+        const batches = await Promise.all(queries.map(async query => {
+            const response = await fetchAudiomack('search', {
+                q: query,
+                page: 1,
+                limit: 10,
+                show: 'music'
+            }, ctrl.signal);
+            if (!response.ok) return [];
+            const data = await response.json();
+            return data.results || [];
+        }));
+        const unique = new Map();
+        for (const item of batches.flat()) {
+            if (!item?.id || unique.has(String(item.id))) continue;
+            unique.set(String(item.id), {
+                id: String(item.id),
+                name: item.title,
+                title: item.title,
+                artist: item.artist || item.uploader?.name || '',
+                primaryArtists: item.artist || item.uploader?.name || '',
+                duration: Number(item.duration || 0),
+                image: [{ url: item.image || item.image_base || '', quality: '500x500' }],
+                source: 'audiomack'
+            });
+        }
+        return selectBestCandidate([...unique.values()], artist, track);
+    } catch (error) {
+        console.log('[instant-play] Audiomack catalog search unavailable:', error.message);
+        return null;
+    } finally {
+        clearTimeout(tid);
+    }
+}
+
 async function quickSearch(artist, track) {
     let bestCandidate = null;
     let metadataConfirmedTrack = false;
@@ -366,6 +472,10 @@ async function quickSearch(artist, track) {
     }
 
     if (!bestCandidate) {
+        bestCandidate = await searchAudiomackCandidate(artist, track);
+    }
+
+    if (!bestCandidate) {
         bestCandidate = await searchSoundCloudCandidate(artist, track);
     }
 
@@ -387,10 +497,10 @@ async function quickSearch(artist, track) {
     });
 
     return {
-        source: ['youtube', 'soundcloud'].includes(best.source) ? best.source : 'saavn',
+        source: ['youtube', 'soundcloud', 'audiomack'].includes(best.source) ? best.source : 'saavn',
         videoId: best.id,
-        title: ['youtube', 'soundcloud'].includes(best.source) ? track : (best.name || best.title || track),
-        artist: ['youtube', 'soundcloud'].includes(best.source) ? artist : (artistInfo.full || artist),
+        title: ['youtube', 'soundcloud', 'audiomack'].includes(best.source) ? track : (best.name || best.title || track),
+        artist: ['youtube', 'soundcloud', 'audiomack'].includes(best.source) ? artist : (artistInfo.full || artist),
         thumbnail: best.image?.find(i => i.quality === '500x500')?.url || best.image?.[0]?.url || '',
         resolverUrl: best.resolverUrl || ''
     };
@@ -549,6 +659,25 @@ async function getSoundCloudAudioStream(resolverUrl) {
     }
 }
 
+async function getAudiomackAudioStream(trackId) {
+    if (!/^\d+$/.test(String(trackId || ''))) return null;
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 2500);
+
+    try {
+        const response = await fetchAudiomack(`music/play/${trackId}`, {}, ctrl.signal);
+        if (!response.ok) return null;
+        const data = await response.json();
+        if (!data.signedUrl?.startsWith('https://')) return null;
+        return { audioUrl: data.signedUrl, quality: '128kbps' };
+    } catch (error) {
+        console.log('[instant-play] Audiomack stream unavailable:', error.message);
+        return null;
+    } finally {
+        clearTimeout(tid);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // HANDLER PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -589,6 +718,8 @@ async function handler(req, res) {
     // PASO 2: Obtener stream de audio
     const streamResult = searchResult.source === 'youtube'
         ? await getYouTubeAudioStream(searchResult.videoId)
+        : searchResult.source === 'audiomack'
+            ? await getAudiomackAudioStream(searchResult.videoId)
         : searchResult.source === 'soundcloud'
             ? await getSoundCloudAudioStream(searchResult.resolverUrl)
             : await getAudioStream(searchResult.videoId);

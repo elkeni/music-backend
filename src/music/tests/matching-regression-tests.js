@@ -98,6 +98,21 @@ test('Infiere artista del título si falta metadata', () => {
     assert(result.passed, result.rejectReason);
 });
 
+test('Infiere artista con colaborador y descarta sufijo de aniversario', () => {
+    const result = evaluate({
+        targetArtist: 'La Bella Luz',
+        targetTitle: 'En Vida',
+        candidate: {
+            name: 'La Bella Luz Ft. Kevin Pedraza - En Vida - 29 Años',
+            artist: 'Canal de respaldo',
+            duration: 240
+        }
+    });
+    assert(result.passed, result.rejectReason);
+    assert(result.details.identity.titleScore === 1, 'el sufijo 29 Años no pertenece al título');
+    assert(result.details.identity.artistScore === 1, 'el colaborador no debe ocultar al artista principal');
+});
+
 test('Tolera un typo real sin relajar el artista', () => {
     const result = evaluate({
         targetArtist: 'Grupo 5',
