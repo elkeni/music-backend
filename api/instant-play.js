@@ -230,29 +230,70 @@ async function findExternalMetadata(artist, track) {
 }
 
 async function searchYouTubeCandidate(artist, track) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 3000);
+    const apiKey = process.env.YOUTUBE_INNERTUBE_API_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+
     try {
-        const { createRequire } = await import('module');
-        const require = createRequire(import.meta.url);
-        const YouTube = require('youtube-sr').default || require('youtube-sr');
-        const videos = await YouTube.search(`${artist} ${track}`.trim(), {
-            limit: 5,
-            type: 'video',
-            safeSearch: true
+        const response = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${apiKey}`, {
+            method: 'POST',
+            signal: ctrl.signal,
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 15) gzip',
+                'X-YouTube-Client-Name': '3',
+                'X-YouTube-Client-Version': '20.10.38'
+            },
+            body: JSON.stringify({
+                context: {
+                    client: {
+                        clientName: 'ANDROID',
+                        clientVersion: '20.10.38',
+                        androidSdkVersion: 35,
+                        hl: 'en',
+                        gl: 'US'
+                    }
+                },
+                query: `${artist} ${track}`.trim()
+            })
         });
-        const candidates = videos.map(video => ({
-            id: video.id,
-            name: video.title,
-            title: video.title,
-            artist: video.channel?.name || '',
-            primaryArtists: video.channel?.name || '',
-            duration: Number(video.duration || 0) / 1000,
-            image: [{ url: video.thumbnail?.url || '', quality: '500x500' }],
-            source: 'youtube'
-        }));
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        const renderers = [];
+        const visit = value => {
+            if (!value || typeof value !== 'object' || renderers.length >= 20) return;
+            if (value.videoId && value.title) renderers.push(value);
+            for (const child of Object.values(value)) visit(child);
+        };
+        const textOf = value => value?.runs?.map(run => run.text).join('') || value?.simpleText || '';
+        visit(data);
+
+        const unique = new Map();
+        for (const video of renderers) {
+            if (unique.has(video.videoId)) continue;
+            const title = textOf(video.title);
+            if (!title) continue;
+            const channel = textOf(video.ownerText) || textOf(video.longBylineText) || textOf(video.shortBylineText);
+            const thumbnails = video.thumbnail?.thumbnails || [];
+            unique.set(video.videoId, {
+                id: video.videoId,
+                name: title,
+                title,
+                artist: channel,
+                primaryArtists: channel,
+                duration: 0,
+                image: [{ url: thumbnails.at(-1)?.url || '', quality: '500x500' }],
+                source: 'youtube'
+            });
+        }
+        const candidates = [...unique.values()].slice(0, 10);
         return selectBestCandidate(candidates, artist, track);
     } catch (error) {
         console.log('[instant-play] YouTube catalog search unavailable:', error.message);
         return null;
+    } finally {
+        clearTimeout(tid);
     }
 }
 
