@@ -6,10 +6,11 @@
  * Módulo compartido para extracción y validación de canciones.
  * Usado por: api/youtube-search.js, api/search.js, song-loader.js
  * 
- * REGLA DE ORO: Solo música de estudio
+ * REGLA DE ORO: Respetar la versión solicitada por el usuario
  * 
- * ✅ PERMITIDO: Singles, álbumes, EPs, remixes, remasters, radio edits
- * ❌ PROHIBIDO: Live, acoustic, covers, karaoke, slowed, nightcore
+ * ✅ PERMITIDO: Original, live, acústica, instrumental y edits oficiales
+ *                 cuando coinciden con la versión solicitada.
+ * ❌ PROHIBIDO: Covers, karaoke, tributos y edits no oficiales.
  * 
  * ═══════════════════════════════════════════════════════════════════════════════
  */
@@ -54,7 +55,8 @@ export function detectVersion(title) {
     if (/\blive\b/i.test(lower) && /\b(at|from|in|on|session)\b/i.test(lower)) {
         return { type: 'live', detail: 'live_venue', isForbidden: true };
     }
-    if (/\b(live\s*version|live\s*performance|en\s*vivo|en\s*directo)\b/i.test(lower)) {
+    if (/\b(live\s*version|live\s*performance|en\s*vivo|en\s*directo)\b/i.test(lower)
+        || /(?:[\[(]\s*live\s*[\])]|\blive\s*$)/i.test(lower)) {
         return { type: 'live', detail: 'live_explicit', isForbidden: true };
     }
 
@@ -71,9 +73,14 @@ export function detectVersion(title) {
         return { type: 'cover', detail: 'tribute', isForbidden: true };
     }
 
-    // Karaoke / Instrumental
-    if (/\b(karaoke|instrumental|backing\s*track)\b/i.test(lower)) {
+    // Karaoke y backing tracks nunca sustituyen a una grabación musical.
+    if (/\b(karaoke|backing\s*track)\b/i.test(lower)) {
         return { type: 'karaoke', detail: null, isForbidden: true };
+    }
+
+    // Un instrumental sí es válido cuando fue solicitado explícitamente.
+    if (/\binstrumental\b/i.test(lower)) {
+        return { type: 'instrumental', detail: null, isForbidden: true };
     }
 
     // Sped up / Slowed / Nightcore
@@ -142,7 +149,9 @@ export function detectVersion(title) {
 
     // Remix (PERMITIDO - remix oficial)
     if (/\bremix\b/i.test(lower)) {
-        const match = title.match(/\(([^)]*remix[^)]*)\)/i) || title.match(/\[([^\]]*remix[^\]]*)\]/i);
+        const match = title.match(/\(([^)]*remix[^)]*)\)/i)
+            || title.match(/\[([^\]]*remix[^\]]*)\]/i)
+            || title.match(/\b([^()[\]|-]{2,40}\s+remix)\s*$/i);
         return { type: 'remix', detail: match ? match[1].trim() : null, isForbidden: false };
     }
 
@@ -164,6 +173,86 @@ export function detectVersion(title) {
 
     // Original / Sin versión especial
     return { type: 'original', detail: null, isForbidden: false };
+}
+
+const NEVER_ACCEPT_VERSION_TYPES = new Set([
+    'cover', 'karaoke', 'bootleg', 'mashup', 'vip_edit', 'dj_edit', 'flip', 'rework'
+]);
+
+const STRICT_VERSION_TYPES = new Set([
+    'live', 'acoustic', 'instrumental', 'remix', 'remaster', 'radio_edit',
+    'extended', 'slowed', 'sped_up', 'demo'
+]);
+
+function normalizeVersionDetail(detail) {
+    return normalizeText(detail || '')
+        .replace(/\b(remix|remaster(?:ed)?|version|versi[oó]n|mix|edit)\b/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * Compara la intención de versión independientemente de artista y título.
+ * Una versión explícita es obligatoria; una búsqueda sin descriptor representa
+ * la original. Remasters y radio edits quedan como fallbacks oficiales con
+ * penalización, para mantener el recall cuando el catálogo no tiene el master.
+ */
+export function evaluateVersionCompatibility(targetTitle, candidateTitle) {
+    const target = detectVersion(targetTitle || '');
+    const candidate = detectVersion(candidateTitle || '');
+
+    if (NEVER_ACCEPT_VERSION_TYPES.has(candidate.type)) {
+        return { passed: false, reason: `forbidden_version:${candidate.type}`, score: 0, exact: false, target, candidate };
+    }
+
+    if (STRICT_VERSION_TYPES.has(target.type)) {
+        if (candidate.type !== target.type) {
+            return { passed: false, reason: `version_mismatch:wanted_${target.type}`, score: 0, exact: false, target, candidate };
+        }
+
+        if (target.type === 'remaster' && target.detail && candidate.detail
+            && target.detail !== candidate.detail) {
+            return { passed: false, reason: 'version_mismatch:remaster_year', score: 0, exact: false, target, candidate };
+        }
+
+        // "Remix" genérico acepta cualquier remix oficial. Un remix nombrado
+        // (p. ej. "Fred remix") debe conservar ese nombre para no cambiar de mix.
+        if (target.type === 'remix') {
+            const targetDetail = normalizeVersionDetail(target.detail);
+            const candidateDetail = normalizeVersionDetail(candidate.detail);
+            if (targetDetail && candidateDetail) {
+                const detailScore = calculateStringSimilarity(targetDetail, candidateDetail).score;
+                if (detailScore < 0.72) {
+                    return { passed: false, reason: 'version_mismatch:remix_identity', score: 0, exact: false, target, candidate };
+                }
+                return { passed: true, reason: null, score: detailScore, exact: detailScore >= 0.995, target, candidate };
+            }
+        }
+
+        return { passed: true, reason: null, score: 1, exact: true, target, candidate };
+    }
+
+    if (candidate.type === 'original') {
+        return { passed: true, reason: null, score: 1, exact: true, target, candidate };
+    }
+
+    // Fallbacks oficiales compatibles con la canción original, pero siempre
+    // pierden frente al master original cuando ambos están disponibles.
+    if (candidate.type === 'remaster') {
+        return { passed: true, reason: null, score: 0.88, exact: false, target, candidate };
+    }
+    if (candidate.type === 'radio_edit') {
+        return { passed: true, reason: null, score: 0.80, exact: false, target, candidate };
+    }
+
+    return {
+        passed: false,
+        reason: `version_mismatch:wanted_original_got_${candidate.type}`,
+        score: 0,
+        exact: false,
+        target,
+        candidate
+    };
 }
 
 
@@ -395,6 +484,7 @@ function normalizeTitleForMatching(value) {
         .replace(/[\[(]\s*(salsa|cumbia|bachata|merengue|reggaeton)?\s*(version|versi[oó]n)?\s*[\])]/gi, '')
         .replace(/[\[(][^\])]*\b(remix|remaster(?:ed)?|radio\s+edit|extended\s+mix|original\s+mix)\b[^\])]*[\])]/gi, '')
         .replace(/[\[(]\s*(concierto\s+)?(en\s+vivo|live)(\s+(at|from|in)\s+[^\])]+)?\s*[\])]/gi, '')
+        .replace(/[\[(][^\])]*\b(acoustic|acustic[ao]?|unplugged|stripped|instrumental|sped\s*up|slowed(?:\s*[+&]\s*reverb)?|nightcore|demo)\b[^\])]*[\])]/gi, '')
         .replace(/\s*[|]\s*(official|oficial)?\s*(audio|video|lyrics?|letra|visualizer).*$/gi, '')
         .replace(/\s*[|]\s*(audio|video)\s*(official|oficial).*$/gi, '')
         .replace(/\b(audio|video)\s*(official|oficial)\s*\d{0,4}\s*$/gi, '')
@@ -403,6 +493,7 @@ function normalizeTitleForMatching(value) {
         .replace(/\b(remaster(?:ed)?|remix|radio\s+edit|extended\s+mix|original\s+mix)\b/gi, '')
         .replace(/\b(salsa|cumbia|bachata|merengue)\s+version\b/gi, '')
         .replace(/\b(en\s+vivo|live)\s*$/gi, '')
+        .replace(/\b(acoustic|acustic[ao]?|unplugged|stripped|instrumental|sped\s*up|slowed(?:\s*[+&]\s*reverb)?|nightcore|demo)(?:\s+(?:version|versi[oó]n))?\s*$/gi, '')
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -675,95 +766,20 @@ export function evaluateCandidate(candidate, params) {
         };
     }
 
-    // FASE 2: VERSIÓN PROHIBIDA
-    const version = detectVersion(candidate.name || candidate.title || '');
+    // FASE 2: la versión solicitada es una condición independiente de identidad.
+    const candidateTitle = candidate.name || candidate.title || '';
+    const versionCompatibility = evaluateVersionCompatibility(targetTitle, candidateTitle);
+    const version = versionCompatibility.candidate;
 
-    if (version.isForbidden) {
-        // EXCEPCIÓN: Si el usuario busca explícitamente "En Vivo" o "Live", permitimos la versión
-        const targetWantsLive = /\b(live|en\s*vivo|concierto|vivo|directo)\b/i.test(targetTitle || '');
-        let isLiveException = targetWantsLive && version.type === 'live';
-
-        // 🇵🇪 EXCEPCIÓN PERÚ (Cumbia/Salsa Friendly):
-        // Permitimos versiones en vivo para artistas de cumbia/salsa donde el hit suele ser en vivo.
-        // Lista blanca de artistas y palabras clave comunes en Perú.
-        if (!isLiveException && version.type === 'live') {
-            const artistLower = (extractArtistInfo(candidate).primary || '').toLowerCase();
-            const LIVE_FRIENDLY_KEYWORDS = [
-                'grupo 5', 'agua marina', 'armonía 10', 'armonia 10', 'corazón serrano', 'corazon serrano',
-                'daniela darcourt', 'combinación de la habana', 'son tentación', 'josimar',
-                'yahaira plasencia', 'gran orquesta', 'hermanos', 'orquesta', 'zaperoko',
-                'septeto', 'papillón', 'deyvis orosco'
-            ];
-
-            const isFriendlyArtist = LIVE_FRIENDLY_KEYWORDS.some(kw => artistLower.includes(kw));
-
-            if (isFriendlyArtist) {
-                // Solo permitimos si la identidad del título es muy fuerte (evitar falsos positivos en vivo)
-                // Se evaluará más adelante, por ahora levantamos el flag de rechazo.
-                isLiveException = true;
-                // Marcamos el detalle para penalizar score después, no rechazar.
-                version.detail = 'live_exception_peru';
-            }
-        }
-
-        if (!isLiveException) {
-            return {
-                passed: false,
-                rejected: true,
-                rejectReason: `forbidden_version:${version.type}`,
-                scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
-                version,
-                feats: []
-            };
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // FASE 5: VERSION MATCHING (FLEXIBLE)
-    // Si el target pide remix, el candidato debe ser remix O contener 'remix' en título
-    // ═══════════════════════════════════════════════════════════════════════════
-    const targetLower = (targetTitle || '').toLowerCase();
-    const candTitleLower = (candidate.name || candidate.title || '').toLowerCase();
-
-    const targetWantsRemix = /\bremix\b/i.test(targetLower);
-    const targetWantsRemaster = /\bremaster/i.test(targetLower);
-    const targetWantsLive = /\b(live|en\s*vivo|concierto|directo)\b/i.test(targetLower);
-
-    // Para remix: verificar detectVersion O que el título contenga 'remix'
-    const candidateIsRemix = version.type === 'remix' || /\bremix\b/i.test(candTitleLower);
-    const candidateIsRemaster = version.type === 'remaster' || /\bremaster/i.test(candTitleLower);
-    const candidateIsLive = version.type === 'live';
-
-    if (targetWantsRemix && !candidateIsRemix) {
+    if (!versionCompatibility.passed) {
         return {
             passed: false,
             rejected: true,
-            rejectReason: 'version_mismatch:wanted_remix',
+            rejectReason: versionCompatibility.reason,
             scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
             version,
-            feats: []
-        };
-    }
-
-    if (targetWantsRemaster && !candidateIsRemaster) {
-        return {
-            passed: false,
-            rejected: true,
-            rejectReason: 'version_mismatch:wanted_remaster',
-            scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
-            version,
-            feats: []
-        };
-    }
-
-    if (targetWantsLive && !candidateIsLive) {
-        return {
-            passed: false,
-            rejected: true,
-            rejectReason: 'version_mismatch:wanted_live',
-            scores: { identityScore: 0, versionScore: 0, durationScore: 0, albumScore: 0, finalConfidence: 0 },
-            version,
-            feats: []
+            feats: [],
+            details: { versionCompatibility }
         };
     }
 
@@ -787,19 +803,7 @@ export function evaluateCandidate(candidate, params) {
     const isClean = cleanPattern.test(candTitleRawLower) && !explicitPattern.test(candTitleRawLower);
     const isExplicit = explicitPattern.test(candTitleRawLower);
 
-    let versionScore = 1.0;
-
-    if (version.type === 'original') versionScore = 1.0;
-    else if (version.type === 'remaster') versionScore = 0.98;
-    else if (version.type === 'radio_edit') versionScore = 0.95;
-    else if (version.type === 'extended') versionScore = 0.90;
-    else if (version.type === 'remix') versionScore = 0.90;
-    else if (version.type === 'live' && version.detail === 'live_exception_peru') {
-        // Penalización moderada para "En Vivo" aceptado (para que pierda contra estudio si existe)
-        versionScore = 0.75;
-    } else {
-        versionScore = 0.9;
-    }
+    let versionScore = versionCompatibility.score;
 
     // AJUSTE POR PREFERENCIA DE USUARIO (Sin censura > Censurado)
     if (isClean) {
@@ -872,7 +876,8 @@ export function evaluateCandidate(candidate, params) {
         feats,
         details: {
             identity,
-            context
+            context,
+            versionCompatibility
         }
     };
 }

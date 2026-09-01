@@ -200,6 +200,102 @@ test('Bloquea versión de estudio cuando se pidió live', () => {
     assert(result.rejectReason === 'version_mismatch:wanted_live', result.rejectReason);
 });
 
+test('Bloquea live cuando se pidió la canción original', () => {
+    const result = evaluate({
+        targetArtist: 'Coldplay',
+        targetTitle: 'Yellow',
+        candidate: { name: 'Coldplay - Yellow (Live)', artist: 'Coldplay', duration: 269 }
+    });
+    assert(!result.passed, 'un live no debe sustituir silenciosamente al master original');
+    assert(result.rejectReason === 'version_mismatch:wanted_original_got_live', result.rejectReason);
+});
+
+test('Bloquea remix cuando se pidió la canción original', () => {
+    const result = evaluate({
+        targetArtist: 'Dua Lipa',
+        targetTitle: 'Levitating',
+        candidate: { name: 'Dua Lipa - Levitating (DaBaby Remix)', artist: 'Dua Lipa', duration: 203 }
+    });
+    assert(!result.passed, 'un remix no debe sustituir silenciosamente a la original');
+    assert(result.rejectReason === 'version_mismatch:wanted_original_got_remix', result.rejectReason);
+});
+
+test('Acepta acústica sólo cuando fue solicitada', () => {
+    const accepted = evaluate({
+        targetArtist: 'Foo Fighters',
+        targetTitle: 'Everlong Acoustic Version',
+        candidate: { name: 'Foo Fighters - Everlong (Acoustic)', artist: 'Foo Fighters', duration: 250 }
+    });
+    assert(accepted.passed, accepted.rejectReason);
+    assert(accepted.details.identity.titleScore === 1, 'el descriptor acústico debe separarse de la identidad');
+
+    const rejected = evaluate({
+        targetArtist: 'Foo Fighters',
+        targetTitle: 'Everlong Acoustic',
+        candidate: { name: 'Foo Fighters - Everlong', artist: 'Foo Fighters', duration: 250 }
+    });
+    assert(!rejected.passed, 'la original no debe sustituir a la acústica solicitada');
+    assert(rejected.rejectReason === 'version_mismatch:wanted_acoustic', rejected.rejectReason);
+});
+
+test('Acepta instrumental solicitado y lo bloquea para la original', () => {
+    const requested = evaluate({
+        targetArtist: 'The xx',
+        targetTitle: 'Intro Instrumental',
+        candidate: { name: 'The xx - Intro (Instrumental)', artist: 'The xx', duration: 130 }
+    });
+    assert(requested.passed, requested.rejectReason);
+
+    const original = evaluate({
+        targetArtist: 'The xx',
+        targetTitle: 'Intro',
+        candidate: { name: 'The xx - Intro (Instrumental)', artist: 'The xx', duration: 130 }
+    });
+    assert(!original.passed, 'instrumental no debe reemplazar a la versión original');
+});
+
+test('Distingue remixes nombrados de la misma canción', () => {
+    const correct = evaluate({
+        targetArtist: 'Fred again..',
+        targetTitle: 'Beto’s Horns (fred remix)',
+        candidate: { name: 'Fred again.. - Beto’s Horns (Fred Remix)', artist: 'Fred again..', duration: 210 }
+    });
+    assert(correct.passed, correct.rejectReason);
+
+    const wrong = evaluate({
+        targetArtist: 'Fred again..',
+        targetTitle: 'Beto’s Horns (fred remix)',
+        candidate: { name: 'Fred again.. - Beto’s Horns (Club Remix)', artist: 'Fred again..', duration: 210 }
+    });
+    assert(!wrong.passed, 'un remix nombrado diferente debe rechazarse');
+    assert(wrong.rejectReason === 'version_mismatch:remix_identity', wrong.rejectReason);
+});
+
+test('Distingue el año de un remaster cuando ambos lo especifican', () => {
+    const result = evaluate({
+        targetArtist: 'Queen',
+        targetTitle: 'Somebody To Love (2011 Remaster)',
+        candidate: { name: 'Queen - Somebody To Love (2024 Remastered)', artist: 'Queen', duration: 296 }
+    });
+    assert(!result.passed, 'años de remaster distintos representan masters distintos');
+    assert(result.rejectReason === 'version_mismatch:remaster_year', result.rejectReason);
+});
+
+test('Original prefiere master exacto sobre fallback oficial', () => {
+    const original = evaluate({
+        targetArtist: 'a-ha',
+        targetTitle: 'Take On Me',
+        candidate: { name: 'a-ha - Take On Me', artist: 'a-ha', duration: 225 }
+    });
+    const remaster = evaluate({
+        targetArtist: 'a-ha',
+        targetTitle: 'Take On Me',
+        candidate: { name: 'a-ha - Take On Me (2015 Remaster)', artist: 'a-ha', duration: 225 }
+    });
+    assert(original.passed && remaster.passed, 'el remaster oficial debe conservar recall como fallback');
+    assert(original.scores.finalConfidence > remaster.scores.finalConfidence, 'el master original debe quedar primero');
+});
+
 test('Bloquea duración extremadamente incompatible cuando está disponible', () => {
     const result = evaluate({
         targetArtist: 'Daft Punk',

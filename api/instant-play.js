@@ -83,10 +83,6 @@ function selectBestCandidate(results, artist, track) {
         const evaluation = evaluateCandidate(candidate, targetParams);
 
         if (evaluation.passed) {
-            if (evaluation.scores.finalConfidence >= 0.90) {
-                return item; // Retorno inmediato si es excelente
-            }
-
             if (evaluation.scores.finalConfidence > bestScore) {
                 bestScore = evaluation.scores.finalConfidence;
                 bestCandidate = item;
