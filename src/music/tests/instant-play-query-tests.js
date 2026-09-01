@@ -1,4 +1,9 @@
-import instantPlayHandler, { buildMetadataSearchQueries, buildSearchQueries } from '../../../api/instant-play.js';
+import instantPlayHandler, {
+    buildMetadataSearchQueries,
+    buildSearchQueries,
+    normalizeAudioQualityMode,
+    selectAudioStreamByQuality
+} from '../../../api/instant-play.js';
 
 function assert(condition, message) {
     if (!condition) throw new Error(message);
@@ -34,9 +39,22 @@ await instantPlayHandler({ method: 'GET', query: {} }, {
 assert(responseStatus === 400, `Estado esperado 400, recibido ${responseStatus}`);
 assert(responseHeaders['cache-control'] === 'no-store', `Un error no debe cachearse: ${responseHeaders['cache-control']}`);
 
+const qualityFixtures = [
+    { url: 'audio-96', quality: '96kbps' },
+    { url: 'audio-160', quality: '160kbps' },
+    { url: 'audio-320', quality: '320kbps' }
+];
+assert(selectAudioStreamByQuality(qualityFixtures, 'balanced').quality === '160kbps', 'balanced debe elegir 160kbps');
+assert(selectAudioStreamByQuality(qualityFixtures, 'high').quality === '320kbps', 'high debe elegir 320kbps');
+assert(selectAudioStreamByQuality(qualityFixtures, 'data_saver').quality === '96kbps', 'data_saver debe elegir 96kbps');
+assert(selectAudioStreamByQuality(qualityFixtures.slice(0, 1), 'high').quality === '96kbps', 'high necesita fallback disponible');
+assert(normalizeAudioQualityMode(undefined) === 'balanced', 'el modo por defecto debe ser balanced');
+assert(normalizeAudioQualityMode('high', true) === 'data_saver', 'Save-Data debe prevalecer sobre high');
+
 console.log('✅ Query segura DUMBAI:', dumbai.join(' | '));
 console.log("✅ Query segura Beto's Horns:", betosHorns.join(' | '));
 console.log('✅ Query segura Quiereme:', quiereme.join(' | '));
 console.log('✅ Query segura How It Feels:', howItFeels.join(' | '));
 console.log('✅ Enriquecimiento Bonita:', enrichedBonita.join(' | '));
 console.log('✅ Errores instant-play sin caché pública');
+console.log('✅ Calidad adaptativa: balanced=160, high=320, data_saver=96 y fallbacks seguros');

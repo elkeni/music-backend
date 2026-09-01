@@ -9,6 +9,7 @@
  * - artist: Nombre del artista
  * - track: Nombre de la canción
  * - duration: Duración en segundos (opcional)
+ * - quality: balanced (default), high o data_saver
  * 
  * Respuesta:
  * {
@@ -34,6 +35,44 @@ const SOUNDCLOUD_CLIENT_ID = process.env.SOUNDCLOUD_CLIENT_ID || '0dqfiN6c3Y9idZ
 const AUDIOMACK_API = 'https://api.audiomack.com/v1/';
 const AUDIOMACK_CONSUMER_KEY = process.env.AUDIOMACK_CONSUMER_KEY || 'audiomack-web';
 const AUDIOMACK_CONSUMER_SECRET = process.env.AUDIOMACK_CONSUMER_SECRET || 'bd8a07e9f23fbe9d808646b730f89b8e';
+
+export const AUDIO_QUALITY_MODES = Object.freeze({
+    BALANCED: 'balanced',
+    HIGH: 'high',
+    DATA_SAVER: 'data_saver'
+});
+
+export function normalizeAudioQualityMode(value, saveData = false) {
+    if (saveData) return AUDIO_QUALITY_MODES.DATA_SAVER;
+
+    const normalized = String(value || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
+    if (['high', 'highest', '320', '320kbps'].includes(normalized)) return AUDIO_QUALITY_MODES.HIGH;
+    if (['data_saver', 'save_data', 'low', '96', '96kbps'].includes(normalized)) return AUDIO_QUALITY_MODES.DATA_SAVER;
+    return AUDIO_QUALITY_MODES.BALANCED;
+}
+
+/**
+ * Elige una sola URL reproducible sin descargar el archivo en el backend.
+ * balanced apunta a 160 kbps, high usa la mejor disponible y data_saver la
+ * menor calidad aceptable. Siempre conserva fallback si el catálogo no ofrece
+ * exactamente el bitrate objetivo.
+ */
+export function selectAudioStreamByQuality(streams, mode = AUDIO_QUALITY_MODES.BALANCED) {
+    const valid = (streams || [])
+        .map(stream => ({
+            ...stream,
+            kbps: Number(stream.kbps) || parseInt(String(stream.quality || '').match(/(\d+)/)?.[1] || '0', 10)
+        }))
+        .filter(stream => stream.url && stream.kbps >= 96)
+        .sort((left, right) => left.kbps - right.kbps);
+
+    if (valid.length === 0) return null;
+    if (mode === AUDIO_QUALITY_MODES.HIGH) return valid.at(-1);
+    if (mode === AUDIO_QUALITY_MODES.DATA_SAVER) return valid[0];
+
+    const atOrBelowBalanced = valid.filter(stream => stream.kbps <= 160);
+    return atOrBelowBalanced.at(-1) || valid[0];
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CORS
@@ -506,7 +545,7 @@ async function quickSearch(artist, track) {
 // OBTENER STREAM DE AUDIO
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function getAudioStream(videoId) {
+async function getAudioStream(videoId, qualityMode = AUDIO_QUALITY_MODES.BALANCED) {
     const url = `${SOURCE_API}/api/songs/${videoId}`;
 
     const ctrl = new AbortController();
@@ -527,21 +566,22 @@ async function getAudioStream(videoId) {
 
         if (!songData?.downloadUrl || !Array.isArray(songData.downloadUrl)) return null;
 
-        // Ordenar por velocidad (96kbps preferible para instant play)
+        // La URL apunta directamente al CDN; seleccionar más calidad no añade
+        // una descarga intermedia en este backend.
         const streams = songData.downloadUrl
             .map(s => ({
                 url: s.url,
                 quality: s.quality || 'unknown',
                 kbps: parseInt(String(s.quality).match(/(\d+)/)?.[1] || '0', 10)
             }))
-            .filter(s => s.url && s.kbps >= 96) // Mínimo aceptable
-            .sort((a, b) => a.kbps - b.kbps); // Ascendente: 96 -> 160 -> 320
+            .filter(s => s.url && s.kbps >= 96);
 
-        if (streams.length === 0) return null;
+        const selected = selectAudioStreamByQuality(streams, qualityMode);
+        if (!selected) return null;
 
         return {
-            audioUrl: streams[0].url,
-            quality: streams[0].quality
+            audioUrl: selected.url,
+            quality: selected.quality
         };
     } catch (e) {
         clearTimeout(tid);
@@ -554,7 +594,7 @@ async function getAudioStream(videoId) {
  * Resuelve audio de YouTube con el cliente Android oficial de InnerTube. A
  * diferencia del fallback anterior, este ID nunca se envía a Saavn.
  */
-async function getYouTubeAudioStream(videoId) {
+async function getYouTubeAudioStream(videoId, qualityMode = AUDIO_QUALITY_MODES.BALANCED) {
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 4500);
     const apiKey = process.env.YOUTUBE_INNERTUBE_API_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
@@ -612,16 +652,18 @@ async function getYouTubeAudioStream(videoId) {
             const formats = (data.streamingData?.adaptiveFormats || [])
                 .filter(format => format.url && /^audio\//i.test(format.mimeType || ''))
                 .filter(format => Number(format.bitrate || 0) >= 96000)
-                .sort((left, right) => {
-                    const leftMp4 = /audio\/mp4/i.test(left.mimeType || '') ? 0 : 1;
-                    const rightMp4 = /audio\/mp4/i.test(right.mimeType || '') ? 0 : 1;
-                    return leftMp4 - rightMp4 || Number(left.bitrate) - Number(right.bitrate);
-                });
+                .map(format => ({ ...format, kbps: Math.round(Number(format.bitrate) / 1000) }));
             if (formats.length === 0) continue;
 
+            // MP4/AAC tiene la compatibilidad más amplia. Solo usamos otro
+            // contenedor si YouTube no ofrece ningún stream MP4 válido.
+            const mp4Formats = formats.filter(format => /audio\/mp4/i.test(format.mimeType || ''));
+            const selected = selectAudioStreamByQuality(mp4Formats.length ? mp4Formats : formats, qualityMode);
+            if (!selected) continue;
+
             return {
-                audioUrl: formats[0].url,
-                quality: `${Math.round(Number(formats[0].bitrate) / 1000)}kbps`
+                audioUrl: selected.url,
+                quality: `${selected.kbps}kbps`
             };
         }
         return null;
@@ -684,9 +726,11 @@ async function handler(req, res) {
     // Los errores nunca deben quedar congelados en el CDN. Solo una respuesta
     // reproducible recibe caché pública al final del handler.
     res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Vary', 'Save-Data');
 
-    const { artist, track, title } = req.query;
+    const { artist, track, title, quality } = req.query;
     const trackName = track || title || '';
+    const qualityMode = normalizeAudioQualityMode(quality, req.headers?.['save-data'] === 'on');
 
     if (!artist && !trackName) {
         return res.status(400).json({
@@ -713,12 +757,12 @@ async function handler(req, res) {
 
     // PASO 2: Obtener stream de audio
     const streamResult = searchResult.source === 'youtube'
-        ? await getYouTubeAudioStream(searchResult.videoId)
+        ? await getYouTubeAudioStream(searchResult.videoId, qualityMode)
         : searchResult.source === 'audiomack'
             ? await getAudiomackAudioStream(searchResult.videoId)
         : searchResult.source === 'soundcloud'
             ? await getSoundCloudAudioStream(searchResult.resolverUrl)
-            : await getAudioStream(searchResult.videoId);
+            : await getAudioStream(searchResult.videoId, qualityMode);
 
     if (!streamResult) {
         return res.status(404).json({
@@ -743,6 +787,7 @@ async function handler(req, res) {
         success: true,
         audioUrl: streamResult.audioUrl,
         quality: streamResult.quality,
+        qualityMode,
         track: {
             title: searchResult.title,
             artist: searchResult.artist,
