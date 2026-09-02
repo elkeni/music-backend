@@ -27,6 +27,7 @@
 
 import { createHmac, randomBytes } from 'node:crypto';
 import { evaluateCandidate, extractArtistInfo } from '../src/music/extraction/youtube-extractor.js';
+import { buildPlaybackCacheKey, getOrResolvePlayback } from '../src/music/cache/playback-cache.js';
 
 export const config = { runtime: 'nodejs' };
 
@@ -196,8 +197,7 @@ export function buildMetadataSearchQueries(metadata, requestedArtist, requestedT
     return [...new Set(queries.filter(Boolean))];
 }
 
-async function searchSaavnCandidates(artist, track, extraQueries = []) {
-    const queries = [...new Set([...buildSearchQueries(artist, track), ...extraQueries])];
+async function runSaavnQueries(queries) {
     const searches = queries.map(async (query) => {
         const url = `${SOURCE_API}/api/search/songs?query=${encodeURIComponent(query)}&limit=10`;
         const ctrl = new AbortController();
@@ -222,6 +222,12 @@ async function searchSaavnCandidates(artist, track, extraQueries = []) {
         if (!unique.has(key)) unique.set(key, item);
     }
     return [...unique.values()];
+}
+
+async function searchSaavnCandidate(artist, track, extraQueries = []) {
+    const queries = [...new Set([...buildSearchQueries(artist, track), ...extraQueries])];
+    const results = await runSaavnQueries(queries);
+    return selectBestCandidate(results, artist, track);
 }
 
 /**
@@ -269,8 +275,9 @@ async function findExternalMetadata(artist, track) {
     }
 }
 
-async function searchYouTubeCandidate(artist, track) {
+async function searchYouTubeCandidate(artist, track, externalSignal) {
     const ctrl = new AbortController();
+    externalSignal?.addEventListener('abort', () => ctrl.abort(), { once: true });
     const tid = setTimeout(() => ctrl.abort(), 3000);
     const apiKey = process.env.YOUTUBE_INNERTUBE_API_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 
@@ -337,8 +344,9 @@ async function searchYouTubeCandidate(artist, track) {
     }
 }
 
-async function searchSoundCloudCandidate(artist, track) {
+async function searchSoundCloudCandidate(artist, track, externalSignal) {
     const ctrl = new AbortController();
+    externalSignal?.addEventListener('abort', () => ctrl.abort(), { once: true });
     const tid = setTimeout(() => ctrl.abort(), 3000);
 
     try {
@@ -428,8 +436,9 @@ async function fetchAudiomack(path, params = {}, signal) {
     });
 }
 
-async function searchAudiomackCandidate(artist, track) {
+async function searchAudiomackCandidate(artist, track, externalSignal) {
     const ctrl = new AbortController();
+    externalSignal?.addEventListener('abort', () => ctrl.abort(), { once: true });
     const tid = setTimeout(() => ctrl.abort(), 3500);
     const compactTrack = String(track || '')
         .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
@@ -483,39 +492,40 @@ async function quickSearch(artist, track) {
 
     // 1. INTENTO PRIMARIO: Saavn API con variantes robustas de query
     try {
-        const results = await searchSaavnCandidates(artist, track);
-        if (results.length > 0) {
-            bestCandidate = selectBestCandidate(results, artist, track);
-        }
+        bestCandidate = await searchSaavnCandidate(artist, track);
     } catch (e) {
         console.log('[instant-play] Saavn search failed/timeout, trying fallback...');
     }
 
-    // 2. ENRIQUECIMIENTO: recuperar colaboradores/álbum y reintentar Saavn.
+    // 2. FALLBACKS EN PARALELO. El enriquecimiento de Saavn compite con las
+    // demás fuentes en vez de añadir todos sus timeouts en cascada.
     if (!bestCandidate) {
-        try {
+        const fallbackController = new AbortController();
+        const rejectMissing = promise => promise.then(value => value || Promise.reject(new Error('no_match')));
+        const enrichedSaavn = (async () => {
             const metadata = await findExternalMetadata(artist, track);
             metadataConfirmedTrack = !!metadata;
             const metadataQueries = buildMetadataSearchQueries(metadata, artist, track);
-            if (metadataQueries.length > 0) {
-                const enrichedResults = await searchSaavnCandidates(artist, track, metadataQueries);
-                bestCandidate = selectBestCandidate(enrichedResults, artist, track);
-            }
-        } catch (err) {
-            console.error('[instant-play] Metadata-enriched search failed:', err.message);
+            if (metadataQueries.length === 0) return null;
+            return searchSaavnCandidate(artist, track, metadataQueries);
+        })().catch(error => {
+            console.log('[instant-play] Metadata-enriched search failed:', error.message);
+            return null;
+        });
+        try {
+            // El primero que supera el matching estricto gana.
+            bestCandidate = await Promise.any([
+                rejectMissing(enrichedSaavn),
+                rejectMissing(searchAudiomackCandidate(artist, track, fallbackController.signal)),
+                rejectMissing(searchSoundCloudCandidate(artist, track, fallbackController.signal)),
+                rejectMissing(searchYouTubeCandidate(artist, track, fallbackController.signal))
+            ]);
+            fallbackController.abort();
+        } catch {
+            bestCandidate = null;
+        } finally {
+            fallbackController.abort();
         }
-    }
-
-    if (!bestCandidate) {
-        bestCandidate = await searchAudiomackCandidate(artist, track);
-    }
-
-    if (!bestCandidate) {
-        bestCandidate = await searchSoundCloudCandidate(artist, track);
-    }
-
-    if (!bestCandidate) {
-        bestCandidate = await searchYouTubeCandidate(artist, track);
     }
 
     if (!bestCandidate) {
@@ -720,9 +730,106 @@ async function getAudiomackAudioStream(trackId) {
 // HANDLER PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function handler(req, res) {
-    const startTime = Date.now();
+function playbackTtlSeconds(source) {
+    return source === 'saavn' ? 7200 : 240;
+}
 
+async function resolveStream(searchResult, qualityMode) {
+    if (searchResult.source === 'youtube') {
+        return getYouTubeAudioStream(searchResult.videoId, qualityMode);
+    }
+    if (searchResult.source === 'audiomack') {
+        return getAudiomackAudioStream(searchResult.videoId);
+    }
+    if (searchResult.source === 'soundcloud') {
+        return getSoundCloudAudioStream(searchResult.resolverUrl);
+    }
+    return getAudioStream(searchResult.videoId, qualityMode);
+}
+
+/**
+ * Flujo compartido por el endpoint público y /api/prefetch.
+ * Devuelve una resolución completa para que el frontend pueda reproducirla sin
+ * repetir búsqueda. Los fallos no se cachean para evitar falsos negativos.
+ */
+export async function resolveInstantPlayback({ artist = '', track = '', qualityMode = 'balanced' }) {
+    const requestStartedAt = Date.now();
+    const cacheKey = buildPlaybackCacheKey(artist, track, qualityMode);
+
+    const cachedOrResolved = await getOrResolvePlayback(cacheKey, async () => {
+        const searchStartedAt = Date.now();
+        const searchResult = await quickSearch(artist, track);
+        const searchMs = Date.now() - searchStartedAt;
+
+        if (searchResult?.failureCode) {
+            return {
+                ttlSeconds: 0,
+                value: {
+                    success: false,
+                    code: searchResult.failureCode,
+                    error: searchResult.failureCode === 'AUDIO_SOURCE_UNAVAILABLE'
+                        ? 'Track exists but is unavailable in the configured audio catalog'
+                        : 'Track not found',
+                    timings: { searchMs, streamMs: 0 }
+                }
+            };
+        }
+
+        const streamStartedAt = Date.now();
+        const streamResult = await resolveStream(searchResult, qualityMode);
+        const streamMs = Date.now() - streamStartedAt;
+        if (!streamResult) {
+            return {
+                ttlSeconds: 0,
+                value: {
+                    success: false,
+                    code: 'AUDIO_SOURCE_UNAVAILABLE',
+                    error: 'No audio stream available',
+                    track: searchResult,
+                    timings: { searchMs, streamMs }
+                }
+            };
+        }
+
+        return {
+            ttlSeconds: playbackTtlSeconds(searchResult.source),
+            value: {
+                success: true,
+                audioUrl: streamResult.audioUrl,
+                quality: streamResult.quality,
+                qualityMode,
+                track: {
+                    title: searchResult.title,
+                    artist: searchResult.artist,
+                    thumbnail: searchResult.thumbnail,
+                    videoId: searchResult.videoId,
+                    source: searchResult.source
+                },
+                timings: { searchMs, streamMs }
+            }
+        };
+    });
+
+    const totalMs = Date.now() - requestStartedAt;
+    const result = cachedOrResolved.value || {
+        success: false,
+        code: 'RESOLUTION_FAILED',
+        error: 'Playback resolution failed',
+        timings: { searchMs: 0, streamMs: 0 }
+    };
+    const isCacheHit = cachedOrResolved.status !== 'miss';
+
+    return {
+        ...result,
+        cacheStatus: cachedOrResolved.status,
+        timings: isCacheHit
+            ? { cacheMs: totalMs, searchMs: 0, streamMs: 0, totalMs }
+            : { cacheMs: 0, ...result.timings, totalMs },
+        ms: totalMs
+    };
+}
+
+async function handler(req, res) {
     // Los errores nunca deben quedar congelados en el CDN. Solo una respuesta
     // reproducible recibe caché pública al final del handler.
     res.setHeader('Cache-Control', 'no-store');
@@ -740,63 +847,30 @@ async function handler(req, res) {
     }
 
     console.log(`[⚡ instant-play] "${artist} - ${trackName}"`);
+    const result = await resolveInstantPlayback({ artist: artist || '', track: trackName, qualityMode });
+    const timings = result.timings || {};
+    res.setHeader('Server-Timing', [
+        `cache;dur=${timings.cacheMs || 0}`,
+        `search;dur=${timings.searchMs || 0}`,
+        `stream;dur=${timings.streamMs || 0}`,
+        `total;dur=${timings.totalMs || result.ms || 0}`
+    ].join(', '));
+    res.setHeader('X-Playback-Cache', result.cacheStatus || 'miss');
 
-    // PASO 1: Búsqueda rápida
-    const searchResult = await quickSearch(artist || '', trackName);
-
-    if (searchResult?.failureCode) {
-        return res.status(404).json({
-            success: false,
-            code: searchResult.failureCode,
-            error: searchResult.failureCode === 'AUDIO_SOURCE_UNAVAILABLE'
-                ? 'Track exists but is unavailable in the configured audio catalog'
-                : 'Track not found',
-            ms: Date.now() - startTime
-        });
+    if (!result.success) {
+        return res.status(404).json(result);
     }
 
-    // PASO 2: Obtener stream de audio
-    const streamResult = searchResult.source === 'youtube'
-        ? await getYouTubeAudioStream(searchResult.videoId, qualityMode)
-        : searchResult.source === 'audiomack'
-            ? await getAudiomackAudioStream(searchResult.videoId)
-        : searchResult.source === 'soundcloud'
-            ? await getSoundCloudAudioStream(searchResult.resolverUrl)
-            : await getAudioStream(searchResult.videoId, qualityMode);
-
-    if (!streamResult) {
-        return res.status(404).json({
-            success: false,
-            error: 'No audio stream available',
-            track: searchResult,
-            ms: Date.now() - startTime
-        });
-    }
-
-    const totalMs = Date.now() - startTime;
-    console.log(`[⚡ instant-play] ✅ Done in ${totalMs}ms`);
+    console.log(`[⚡ instant-play] ✅ Done in ${result.ms}ms (${result.cacheStatus})`);
 
     // RESPUESTA EXITOSA
     res.setHeader(
         'Cache-Control',
-        searchResult.source === 'soundcloud'
+        result.track.source === 'soundcloud'
             ? 'public, s-maxage=300, stale-while-revalidate=60'
             : 'public, s-maxage=7200, stale-while-revalidate=3600'
     );
-    return res.status(200).json({
-        success: true,
-        audioUrl: streamResult.audioUrl,
-        quality: streamResult.quality,
-        qualityMode,
-        track: {
-            title: searchResult.title,
-            artist: searchResult.artist,
-            thumbnail: searchResult.thumbnail,
-            videoId: searchResult.videoId,
-            source: searchResult.source
-        },
-        ms: totalMs
-    });
+    return res.status(200).json(result);
 }
 
 export default allowCors(handler);

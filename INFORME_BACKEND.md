@@ -104,7 +104,7 @@ Aunque el nombre dice YouTube, el proveedor de streams sólo entiende IDs Saavn 
 
 ### `GET /api/prefetch`
 
-Recibe `title`, `artist` y `duration`. Reutiliza `executeSearch`, requiere una confianza mínima y precarga streams en el `Map` exportado por `youtube-streams.js`. La respuesta confirma el calentamiento, pero no devuelve los streams. La función `internalPrefetch()` permite calentamiento fire-and-forget desde el buscador.
+Recibe `title`/`track`, `artist` y `quality`. Desde septiembre de 2026 reutiliza exactamente `resolveInstantPlayback()`, el mismo flujo de `/api/instant-play`. Devuelve un objeto `playback` completo para que el frontend lo conserve antes del clic y también calienta el caché de resolución compartido cuando Redis está disponible. La función `internalPrefetch()` mantiene compatibilidad con el calentamiento fire-and-forget del buscador.
 
 ### `GET /api/instant-play`
 

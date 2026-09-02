@@ -4,6 +4,11 @@ import instantPlayHandler, {
     normalizeAudioQualityMode,
     selectAudioStreamByQuality
 } from '../../../api/instant-play.js';
+import {
+    buildPlaybackCacheKey,
+    clearPlaybackMemoryCache,
+    getOrResolvePlayback
+} from '../cache/playback-cache.js';
 
 function assert(condition, message) {
     if (!condition) throw new Error(message);
@@ -51,6 +56,33 @@ assert(selectAudioStreamByQuality(qualityFixtures.slice(0, 1), 'high').quality =
 assert(normalizeAudioQualityMode(undefined) === 'balanced', 'el modo por defecto debe ser balanced');
 assert(normalizeAudioQualityMode('high', true) === 'data_saver', 'Save-Data debe prevalecer sobre high');
 
+clearPlaybackMemoryCache();
+const normalizedKey = buildPlaybackCacheKey('CA7RIEL & Paco Amoroso', 'DUMBAÍ', 'high');
+assert(
+    normalizedKey === buildPlaybackCacheKey('ca7riel & paco amoroso', 'dumbai', 'high'),
+    'la clave de playback debe normalizar mayúsculas y acentos'
+);
+
+let resolutionCalls = 0;
+const concurrentKey = `test:${Date.now()}`;
+const resolver = async () => {
+    resolutionCalls++;
+    await Promise.resolve();
+    return { value: { success: true, audioUrl: 'https://audio.test/song' }, ttlSeconds: 60 };
+};
+const [firstResolution, duplicateResolution] = await Promise.all([
+    getOrResolvePlayback(concurrentKey, resolver),
+    getOrResolvePlayback(concurrentKey, resolver)
+]);
+assert(resolutionCalls === 1, `las solicitudes simultáneas ejecutaron ${resolutionCalls} resoluciones`);
+assert(
+    new Set([firstResolution.status, duplicateResolution.status]).has('inflight'),
+    'una solicitud duplicada debe compartir la promesa en curso'
+);
+const cachedResolution = await getOrResolvePlayback(concurrentKey, resolver);
+assert(cachedResolution.status === 'memory', `se esperaba memory hit, llegó ${cachedResolution.status}`);
+assert(resolutionCalls === 1, 'el memory hit no debe ejecutar nuevamente el resolver');
+
 console.log('✅ Query segura DUMBAI:', dumbai.join(' | '));
 console.log("✅ Query segura Beto's Horns:", betosHorns.join(' | '));
 console.log('✅ Query segura Quiereme:', quiereme.join(' | '));
@@ -58,3 +90,4 @@ console.log('✅ Query segura How It Feels:', howItFeels.join(' | '));
 console.log('✅ Enriquecimiento Bonita:', enrichedBonita.join(' | '));
 console.log('✅ Errores instant-play sin caché pública');
 console.log('✅ Calidad adaptativa: balanced=160, high=320, data_saver=96 y fallbacks seguros');
+console.log('✅ Playback cache: claves normalizadas, deduplicación concurrente y memory hit');
