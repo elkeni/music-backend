@@ -655,16 +655,12 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     const collaboratorsPassed = collaboratorMatches.every(match =>
         match.score >= getFieldThreshold(match.target, 'artist')
     );
-    const targetTitleCollaborators = extractFeats(targetTitle || '')
-        .map(normalizeArtistForMatching)
-        .filter(Boolean);
     // Algunos catálogos omiten créditos secundarios en canciones antiguas. Se
-    // tolera sólo si principal+título son prácticamente exactos, el título
-    // solicitado no exige un feat explícito y el candidato no contradice nada.
+    // tolera sólo si principal+título son prácticamente exactos y el candidato
+    // no declara un colaborador contradictorio. Ausencia no equivale a conflicto.
     const implicitCollaboratorsPassed = targetCollaborators.length > 0
         && primaryPassed
         && titleSimilarity.score >= 0.98
-        && targetTitleCollaborators.length === 0
         && candidateCollaborators.length === 0;
     const componentPassed = targetCollaborators.length > 0
         && primaryPassed

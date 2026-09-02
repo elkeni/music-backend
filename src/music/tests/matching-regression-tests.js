@@ -156,13 +156,14 @@ test('Tolera crédito secundario omitido si principal y título son exactos y no
     assert(identity.metrics.artistCredits.implicitCollaboratorsPassed, 'debe reconocer metadata secundaria omitida');
 });
 
-test('No omite colaboradores cuando el título solicitado exige un feat explícito', () => {
+test('Tolera un feat omitido por el catálogo si no existe un crédito contradictorio', () => {
     const identity = evaluatePrimaryIdentity(
         { name: "CAN'T GET OVER YOU", artist: 'Joji' },
         'Joji, Clams Casino',
         "CAN'T GET OVER YOU (feat. Clams Casino)"
     );
-    assert(!identity.passed, JSON.stringify(identity));
+    assert(identity.passed, JSON.stringify(identity));
+    assert(identity.metrics.artistCredits.implicitCollaboratorsPassed, 'ausencia de crédito no debe ser contradicción');
 });
 
 test('Valida todos los artistas de una colaboración múltiple sin depender del orden', () => {
