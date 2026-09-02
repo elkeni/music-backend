@@ -448,6 +448,10 @@ export function extractFeats(title) {
         /\(with\s+([^)]+)\)/gi,
         /\[feat\.?\s+([^\]]+)\]/gi,
         /\[ft\.?\s+([^\]]+)\]/gi,
+        /\bfeat\.?\s+([^()[\]|]+)(?=$|[\[(|])/gi,
+        /\bft\.?\s+([^()[\]|]+)(?=$|[\[(|])/gi,
+        /\bfeaturing\s+([^()[\]|]+)(?=$|[\[(|])/gi,
+        /\bwith\s+([^()[\]|]+)(?=$|[\[(|])/gi,
     ];
 
     for (const pattern of patterns) {
@@ -488,6 +492,8 @@ function normalizeArtistForMatching(value) {
  */
 function normalizeTitleForMatching(value) {
     const cleaned = cleanTitle(value || '')
+        .replace(/\s*[-–—]?\s*(?:19|20)\d{2}\s+remaster(?:ed)?\s*$/gi, '')
+        .replace(/\s*[-–—]?\s*remaster(?:ed)?\s+(?:19|20)\d{2}\s*$/gi, '')
         .replace(/[\[(]\s*(salsa|cumbia|bachata|merengue|reggaeton)?\s*(version|versi[oó]n)?\s*[\])]/gi, '')
         .replace(/[\[(][^\])]*\b(remix|remaster(?:ed)?|radio\s+edit|extended\s+mix|original\s+mix)\b[^\])]*[\])]/gi, '')
         .replace(/[\[(]\s*(concierto\s+)?(en\s+vivo|live)(\s+(at|from|in)\s+[^\])]+)?\s*[\])]/gi, '')
@@ -500,6 +506,8 @@ function normalizeTitleForMatching(value) {
         .replace(/\s*[-–—]\s*from\s+['“”\"]?[^'“”\"]+['“”\"]?\s+soundtrack\s*$/gi, '')
         .replace(/[\[(]\s*from\s+[^\])]+(?:soundtrack)?\s*[\])]/gi, '')
         .replace(/\b(remaster(?:ed)?|remix|radio\s+edit|extended\s+mix|original\s+mix)\b/gi, '')
+        .replace(/\b(?:19|20)\d{2}\b\s*$/gi, '')
+        .replace(/\b(hq|hd|4k)\b\s*$/gi, '')
         .replace(/\b(salsa|cumbia|bachata|merengue)\s+version\b/gi, '')
         .replace(/\b(en\s+vivo|live)\s*$/gi, '')
         .replace(/\b(acoustic|acustic[ao]?|unplugged|stripped|instrumental|sped\s*up|slowed(?:\s*[+&]\s*reverb)?|nightcore|demo)(?:\s+(?:version|versi[oó]n))?\s*$/gi, '')

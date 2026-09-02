@@ -122,6 +122,30 @@ test('Acepta feat secundario informado sólo en el nombre de la canción', () =>
     assert(result.passed, result.rejectReason);
 });
 
+test('Limpia crédito with del título cuando ya fue validado como artista', () => {
+    const result = evaluate({
+        targetArtist: 'The Weeknd, Kendrick Lamar',
+        targetTitle: 'Pray For Me (with Kendrick Lamar)',
+        candidate: { name: 'Pray For Me', artist: 'The Weeknd, Kendrick Lamar', duration: 211 }
+    });
+    assert(result.passed, result.rejectReason);
+    assert(result.details.identity.titleScore === 1, 'with no debe formar parte de la identidad del título');
+});
+
+test('Extrae un feat sin paréntesis del nombre completo de YouTube', () => {
+    const result = evaluate({
+        targetArtist: 'A$AP Rocky, Skepta',
+        targetTitle: 'Praise The Lord (Da Shine) (feat. Skepta)',
+        candidate: {
+            name: 'A$AP Rocky - Praise The Lord (Da Shine) (Lyrics) ft. Skepta',
+            artist: 'A$AP Rocky - Topic',
+            duration: 205
+        }
+    });
+    assert(result.passed, result.rejectReason);
+    assert(result.details.identity.metrics.artistCredits.componentPassed, 'Skepta debe extraerse del sufijo ft.');
+});
+
 test('Tolera crédito secundario omitido si principal y título son exactos y no hay contradicción', () => {
     const identity = evaluatePrimaryIdentity(
         { name: 'Tony', artist: 'Larry Nozero - Topic' },
@@ -354,6 +378,16 @@ test('Distingue el año de un remaster cuando ambos lo especifican', () => {
     });
     assert(!result.passed, 'años de remaster distintos representan masters distintos');
     assert(result.rejectReason === 'version_mismatch:remaster_year', result.rejectReason);
+});
+
+test('Normaliza guion y paréntesis equivalentes en un remaster solicitado', () => {
+    const result = evaluate({
+        targetArtist: 'Michael Jackson',
+        targetTitle: 'Speed Demon - 2012 Remaster',
+        candidate: { name: 'Speed Demon (2012 Remaster)', artist: 'Michael Jackson', duration: 254 }
+    });
+    assert(result.passed, result.rejectReason);
+    assert(result.details.identity.titleScore === 1, 'el año del remaster no debe quedar huérfano en identidad');
 });
 
 test('Original prefiere master exacto sobre fallback oficial', () => {

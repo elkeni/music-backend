@@ -113,6 +113,8 @@ export function cleanTitle(title) {
         /\s*\(from "[^"]+"\)/gi,
         /\s*\(feat\.\s*[^)]+\)/gi,   // Keep feats but maybe normalize elsewhere
         /\s*\(ft\.\s*[^)]+\)/gi,
+        /\s*\(featuring\s+[^)]+\)/gi,
+        /\s*\(with\s+[^)]+\)/gi,
     ];
 
     for (const pattern of SEMANTIC_SUBTITLE_PATTERNS) {
