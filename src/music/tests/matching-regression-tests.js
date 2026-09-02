@@ -122,6 +122,25 @@ test('Acepta feat secundario informado sólo en el nombre de la canción', () =>
     assert(result.passed, result.rejectReason);
 });
 
+test('Tolera crédito secundario omitido si principal y título son exactos y no hay contradicción', () => {
+    const identity = evaluatePrimaryIdentity(
+        { name: 'Tony', artist: 'Larry Nozero - Topic' },
+        'Larry Nozero, Dennis Tini',
+        'Tony'
+    );
+    assert(identity.passed, JSON.stringify(identity));
+    assert(identity.metrics.artistCredits.implicitCollaboratorsPassed, 'debe reconocer metadata secundaria omitida');
+});
+
+test('No omite colaboradores cuando el título solicitado exige un feat explícito', () => {
+    const identity = evaluatePrimaryIdentity(
+        { name: "CAN'T GET OVER YOU", artist: 'Joji' },
+        'Joji, Clams Casino',
+        "CAN'T GET OVER YOU (feat. Clams Casino)"
+    );
+    assert(!identity.passed, JSON.stringify(identity));
+});
+
 test('Valida todos los artistas de una colaboración múltiple sin depender del orden', () => {
     const result = evaluate({
         targetArtist: 'Skrillex, Fatman Scoop, Kill The Noise, Michael Angelakos',

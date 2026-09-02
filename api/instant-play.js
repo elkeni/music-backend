@@ -374,7 +374,13 @@ async function searchSoundCloudCandidate(artist, track, externalSignal) {
             };
         }).filter(item => item.resolverUrl);
 
-        return selectBestCandidate(candidates, artist, track);
+        const bestCandidate = selectBestCandidate(candidates, artist, track);
+        if (!bestCandidate || /\/preview\//i.test(bestCandidate.resolverUrl)) return null;
+
+        // SoundCloud no gana la carrera sólo por encontrar metadata: Vercel
+        // puede recibir resolvers regionales que después responden 404.
+        const preResolvedStream = await getSoundCloudAudioStream(bestCandidate.resolverUrl, externalSignal);
+        return preResolvedStream ? { ...bestCandidate, preResolvedStream } : null;
     } catch (error) {
         console.log('[instant-play] SoundCloud catalog search unavailable:', error.message);
         return null;
@@ -547,7 +553,8 @@ async function quickSearch(artist, track) {
         title: ['youtube', 'soundcloud', 'audiomack'].includes(best.source) ? track : (best.name || best.title || track),
         artist: ['youtube', 'soundcloud', 'audiomack'].includes(best.source) ? artist : (artistInfo.full || artist),
         thumbnail: best.image?.find(i => i.quality === '500x500')?.url || best.image?.[0]?.url || '',
-        resolverUrl: best.resolverUrl || ''
+        resolverUrl: best.resolverUrl || '',
+        preResolvedStream: best.preResolvedStream || null
     };
 }
 
@@ -685,9 +692,10 @@ async function getYouTubeAudioStream(videoId, qualityMode = AUDIO_QUALITY_MODES.
     }
 }
 
-async function getSoundCloudAudioStream(resolverUrl) {
+async function getSoundCloudAudioStream(resolverUrl, externalSignal) {
     if (!resolverUrl?.startsWith('https://api-v2.soundcloud.com/')) return null;
     const ctrl = new AbortController();
+    externalSignal?.addEventListener('abort', () => ctrl.abort(), { once: true });
     const tid = setTimeout(() => ctrl.abort(), 2500);
 
     try {
@@ -735,6 +743,9 @@ function playbackTtlSeconds(source) {
 }
 
 async function resolveStream(searchResult, qualityMode) {
+    if (searchResult.preResolvedStream?.audioUrl) {
+        return searchResult.preResolvedStream;
+    }
     if (searchResult.source === 'youtube') {
         return getYouTubeAudioStream(searchResult.videoId, qualityMode);
     }

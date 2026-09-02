@@ -635,6 +635,9 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     // colaboradores, aunque el proveedor sólo los incluya en "feat/with".
     const bestWholeArtist = bestSimilarity(targetArtistNorm, allArtistVariants);
     const bestPrimaryArtist = bestSimilarity(targetPrimaryNorm, candidatePrimaryVariants);
+    const titleSimilarity = targetTitleNorm
+        ? calculateStringSimilarity(candidateTitleNorm, targetTitleNorm)
+        : { score: 0.5, levenshtein: 0, tokenPrecision: 0, tokenRecall: 0, tokenF1: 0 };
     const collaboratorMatches = targetCollaborators.map(target => ({
         target,
         ...bestSimilarity(target, candidateCollaborators)
@@ -644,7 +647,20 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     const collaboratorsPassed = collaboratorMatches.every(match =>
         match.score >= getFieldThreshold(match.target, 'artist')
     );
-    const componentPassed = targetCollaborators.length > 0 && primaryPassed && collaboratorsPassed;
+    const targetTitleCollaborators = extractFeats(targetTitle || '')
+        .map(normalizeArtistForMatching)
+        .filter(Boolean);
+    // Algunos catálogos omiten créditos secundarios en canciones antiguas. Se
+    // tolera sólo si principal+título son prácticamente exactos, el título
+    // solicitado no exige un feat explícito y el candidato no contradice nada.
+    const implicitCollaboratorsPassed = targetCollaborators.length > 0
+        && primaryPassed
+        && titleSimilarity.score >= 0.98
+        && targetTitleCollaborators.length === 0
+        && candidateCollaborators.length === 0;
+    const componentPassed = targetCollaborators.length > 0
+        && primaryPassed
+        && (collaboratorsPassed || implicitCollaboratorsPassed);
     const collaboratorAverage = collaboratorMatches.length
         ? collaboratorMatches.reduce((sum, match) => sum + match.score, 0) / collaboratorMatches.length
         : 0;
@@ -658,10 +674,6 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
             value: [bestPrimaryArtist.value, ...collaboratorMatches.map(match => match.value)].filter(Boolean).join(', ')
         }
         : bestWholeArtist;
-
-    const titleSimilarity = targetTitleNorm
-        ? calculateStringSimilarity(candidateTitleNorm, targetTitleNorm)
-        : { score: 0.5, levenshtein: 0, tokenPrecision: 0, tokenRecall: 0, tokenF1: 0 };
 
     const titleThreshold = targetTitleNorm ? getFieldThreshold(targetTitleNorm, 'title') : 0;
     let artistThreshold = targetArtistNorm ? getFieldThreshold(targetArtistNorm, 'artist') : 0;
@@ -730,7 +742,8 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
                 collaboratorMatches: collaboratorMatches.map(({ target, value, score }) => ({ target, value, score })),
                 wholeScore: bestWholeArtist.score,
                 wholePassed: wholeArtistPassed,
-                componentPassed
+                componentPassed,
+                implicitCollaboratorsPassed
             }
         }
     };
