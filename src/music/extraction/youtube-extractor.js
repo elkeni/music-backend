@@ -398,6 +398,13 @@ function decodeHtmlEntities(value) {
         .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)));
 }
 
+export function splitArtistCredits(value) {
+    return decodeHtmlEntities(value)
+        .split(/\s*,\s*|\s*&\s*|\s+(?:and|y|feat\.?|ft\.?|featuring|with|x)\s+/gi)
+        .map(part => part.trim())
+        .filter(part => part.length > 0);
+}
+
 /**
  * Extrae información detallada del artista
  * @param {Object} item - Item de la API
@@ -408,8 +415,8 @@ export function extractArtistInfo(item) {
     const collaborators = [];
 
     // Separar colaboradores
-    if (primary && (primary.includes(',') || primary.includes('&') || /\s+(and|y|feat|ft|featuring|with|x)\s+/i.test(primary))) {
-        const parts = primary.split(/[,&]|\s+(and|y|feat\.?|ft\.?|featuring|with|x)\s+/gi).filter(Boolean);
+    if (primary && (primary.includes(',') || primary.includes('&') || /\s+(?:and|y|feat|ft|featuring|with|x)\s+/i.test(primary))) {
+        const parts = splitArtistCredits(primary);
         primary = parts[0]?.trim() || primary;
         collaborators.push(...parts.slice(1).map(p => p?.trim()).filter(Boolean));
     }
@@ -446,7 +453,7 @@ export function extractFeats(title) {
     for (const pattern of patterns) {
         let match;
         while ((match = pattern.exec(title)) !== null) {
-            const artists = match[1].split(/[,&]/).map(a => a.trim()).filter(a => a.length > 1);
+            const artists = splitArtistCredits(match[1]).filter(a => a.length > 1);
             feats.push(...artists);
         }
     }
@@ -490,6 +497,8 @@ function normalizeTitleForMatching(value) {
         .replace(/\b(audio|video)\s*(official|oficial)\s*\d{0,4}\s*$/gi, '')
         .replace(/\b(official|oficial)\s*(audio|video)\s*\d{0,4}\s*$/gi, '')
         .replace(/\b(lyrics?|letra|visualizer)\s*(official|oficial)?\s*$/gi, '')
+        .replace(/\s*[-–—]\s*from\s+['“”\"]?[^'“”\"]+['“”\"]?\s+soundtrack\s*$/gi, '')
+        .replace(/[\[(]\s*from\s+[^\])]+(?:soundtrack)?\s*[\])]/gi, '')
         .replace(/\b(remaster(?:ed)?|remix|radio\s+edit|extended\s+mix|original\s+mix)\b/gi, '')
         .replace(/\b(salsa|cumbia|bachata|merengue)\s+version\b/gi, '')
         .replace(/\b(en\s+vivo|live)\s*$/gi, '')
@@ -526,7 +535,7 @@ function getFieldThreshold(normalizedValue, field) {
 }
 
 function inferArtistAndTitle(rawTitle, targetArtistNorm) {
-    const fallback = { inferredArtist: '', inferredTitle: rawTitle || '' };
+    const fallback = { inferredArtist: '', inferredArtistFull: '', inferredTitle: rawTitle || '' };
     if (!rawTitle || !targetArtistNorm) return fallback;
 
     const parts = rawTitle.split(/\s+[-:|]\s+/).map(part => part.trim()).filter(Boolean);
@@ -546,11 +555,16 @@ function inferArtistAndTitle(rawTitle, targetArtistNorm) {
             && /^(?:\d+\s*)?(?:a[nñ]os?|aniversario|official|oficial|audio|video)$/i.test(remaining.at(-1));
         return {
             inferredArtist: cleanInferredArtist(parts[0]),
+            inferredArtistFull: parts[0],
             inferredTitle: trailingIsEditorial ? remaining.slice(0, -1).join(' ') : remaining.join(' ')
         };
     }
     if (lastScore >= 0.78) {
-        return { inferredArtist: parts[parts.length - 1], inferredTitle: parts.slice(0, -1).join(' ') };
+        return {
+            inferredArtist: cleanInferredArtist(parts[parts.length - 1]),
+            inferredArtistFull: parts[parts.length - 1],
+            inferredTitle: parts.slice(0, -1).join(' ')
+        };
     }
 
     return fallback;
@@ -568,34 +582,82 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     const rawTitle = candidate?.name || candidate?.title || '';
     const targetArtistNorm = normalizeArtistForMatching(targetArtist || '');
     const targetTitleNorm = normalizeTitleForMatching(targetTitle || '');
-    const inferred = inferArtistAndTitle(rawTitle, targetArtistNorm);
+    const targetCredits = splitArtistCredits(targetArtist || '')
+        .map(normalizeArtistForMatching)
+        .filter(Boolean);
+    const targetPrimaryNorm = targetCredits[0] || targetArtistNorm;
+    const targetCollaborators = [...new Set(targetCredits.slice(1))];
+    const inferred = inferArtistAndTitle(rawTitle, targetPrimaryNorm);
     const candidateTitleNorm = normalizeTitleForMatching(inferred.inferredTitle);
 
     const artistInfo = extractArtistInfo(candidate);
-    const artistVariants = [
+    const inferredArtistInfo = extractArtistInfo({ artist: inferred.inferredArtistFull });
+    const metadataPrimary = normalizeArtistForMatching(artistInfo.primary);
+    const inferredPrimary = normalizeArtistForMatching(inferredArtistInfo.primary || inferred.inferredArtist);
+    const candidatePrimaryVariants = [metadataPrimary, inferredPrimary].filter(Boolean);
+    const candidateCollaborators = [
+        ...artistInfo.collaborators,
+        ...inferredArtistInfo.collaborators,
+        ...extractFeats(rawTitle)
+    ].map(normalizeArtistForMatching).filter(Boolean);
+    const wholeArtistVariants = [
         artistInfo.primary,
         artistInfo.full,
-        ...artistInfo.collaborators,
-        inferred.inferredArtist
+        inferred.inferredArtist,
+        inferred.inferredArtistFull
     ].map(normalizeArtistForMatching).filter(Boolean);
+    const allArtistVariants = [
+        ...wholeArtistVariants,
+        ...artistInfo.collaborators.map(normalizeArtistForMatching),
+        ...candidateCollaborators
+    ].filter(Boolean);
 
-    let bestArtist = {
-        score: targetArtistNorm ? 0 : 0.5,
-        levenshtein: 0,
-        tokenPrecision: 0,
-        tokenRecall: 0,
-        tokenF1: 0,
-        value: ''
+    const bestSimilarity = (target, variants) => {
+        let best = {
+            score: target ? 0 : 0.5,
+            levenshtein: 0,
+            tokenPrecision: 0,
+            tokenRecall: 0,
+            tokenF1: 0,
+            value: ''
+        };
+
+        if (!target) return best;
+        for (const variant of new Set(variants)) {
+            const similarity = calculateStringSimilarity(variant, target);
+            if (similarity.score > best.score) best = { ...similarity, value: variant };
+        }
+        return best;
     };
 
-    if (targetArtistNorm) {
-        for (const variant of new Set(artistVariants)) {
-            const similarity = calculateStringSimilarity(variant, targetArtistNorm);
-            if (similarity.score > bestArtist.score) {
-                bestArtist = { ...similarity, value: variant };
-            }
+    // Dos rutas independientes y seguras:
+    // 1) el crédito completo coincide; 2) coinciden el principal y TODOS los
+    // colaboradores, aunque el proveedor sólo los incluya en "feat/with".
+    const bestWholeArtist = bestSimilarity(targetArtistNorm, allArtistVariants);
+    const bestPrimaryArtist = bestSimilarity(targetPrimaryNorm, candidatePrimaryVariants);
+    const collaboratorMatches = targetCollaborators.map(target => ({
+        target,
+        ...bestSimilarity(target, candidateCollaborators)
+    }));
+    const primaryThreshold = targetPrimaryNorm ? getFieldThreshold(targetPrimaryNorm, 'artist') : 0;
+    const primaryPassed = !targetPrimaryNorm || bestPrimaryArtist.score >= primaryThreshold;
+    const collaboratorsPassed = collaboratorMatches.every(match =>
+        match.score >= getFieldThreshold(match.target, 'artist')
+    );
+    const componentPassed = targetCollaborators.length > 0 && primaryPassed && collaboratorsPassed;
+    const collaboratorAverage = collaboratorMatches.length
+        ? collaboratorMatches.reduce((sum, match) => sum + match.score, 0) / collaboratorMatches.length
+        : 0;
+    const componentScore = componentPassed
+        ? (bestPrimaryArtist.score * 0.65) + (collaboratorAverage * 0.35)
+        : 0;
+    const bestArtist = componentScore > bestWholeArtist.score
+        ? {
+            ...bestPrimaryArtist,
+            score: componentScore,
+            value: [bestPrimaryArtist.value, ...collaboratorMatches.map(match => match.value)].filter(Boolean).join(', ')
         }
-    }
+        : bestWholeArtist;
 
     const titleSimilarity = targetTitleNorm
         ? calculateStringSimilarity(candidateTitleNorm, targetTitleNorm)
@@ -611,7 +673,12 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
     }
 
     const titlePassed = !targetTitleNorm || titleSimilarity.score >= titleThreshold;
-    const artistPassed = !targetArtistNorm || bestArtist.score >= artistThreshold;
+    // Para créditos múltiples, una similitud parcial de la cadena completa no
+    // puede ocultar un colaborador ausente. La ruta completa exige cercanía alta.
+    const wholeArtistPassed = !targetArtistNorm || bestWholeArtist.score >= (
+        targetCollaborators.length ? Math.max(artistThreshold, 0.93) : artistThreshold
+    );
+    const artistPassed = !targetArtistNorm || wholeArtistPassed || componentPassed;
 
     let combinedScore;
     if (targetArtistNorm && targetTitleNorm) {
@@ -653,6 +720,17 @@ export function evaluatePrimaryIdentity(candidate, targetArtist, targetTitle) {
                 tokenPrecision: bestArtist.tokenPrecision,
                 tokenRecall: bestArtist.tokenRecall,
                 tokenF1: bestArtist.tokenF1
+            },
+            artistCredits: {
+                targetPrimary: targetPrimaryNorm,
+                targetCollaborators,
+                candidatePrimary: [...new Set(candidatePrimaryVariants)],
+                candidateCollaborators: [...new Set(candidateCollaborators)],
+                primaryScore: bestPrimaryArtist.score,
+                collaboratorMatches: collaboratorMatches.map(({ target, value, score }) => ({ target, value, score })),
+                wholeScore: bestWholeArtist.score,
+                wholePassed: wholeArtistPassed,
+                componentPassed
             }
         }
     };

@@ -89,6 +89,62 @@ test('Decodifica entidades HTML en artistas colaborativos de Saavn', () => {
     assert(result.details.identity.artistScore === 1, 'la entidad &amp; debe decodificarse');
 });
 
+test('Acepta colaborador acreditado en el título aunque Saavn sólo informe el principal', () => {
+    const result = evaluate({
+        targetArtist: 'Joji, Clams Casino',
+        targetTitle: "CAN'T GET OVER YOU (feat. Clams Casino)",
+        candidate: {
+            name: "CAN'T GET OVER YOU (feat. Clams Casino)",
+            artist: 'Joji',
+            duration: 207
+        }
+    });
+    assert(result.passed, result.rejectReason);
+    assert(result.details.identity.metrics.artistCredits.componentPassed, 'debe validar el crédito compuesto');
+});
+
+test('Bloquea un colaborador diferente aunque coincidan principal y título base', () => {
+    const identity = evaluatePrimaryIdentity(
+        { name: "CAN'T GET OVER YOU (feat. Thundercat)", artist: 'Joji' },
+        'Joji, Clams Casino',
+        "CAN'T GET OVER YOU (feat. Clams Casino)"
+    );
+    assert(!identity.passed, JSON.stringify(identity));
+    assert(!identity.metrics.artistCredits.componentPassed, 'no debe inventar el colaborador solicitado');
+});
+
+test('Acepta feat secundario informado sólo en el nombre de la canción', () => {
+    const result = evaluate({
+        targetArtist: 'Roddy Ricch, Gunna',
+        targetTitle: 'Start Wit Me (feat. Gunna)',
+        candidate: { name: 'Start Wit Me (feat. Gunna)', artist: 'Roddy Ricch', duration: 158 }
+    });
+    assert(result.passed, result.rejectReason);
+});
+
+test('Valida todos los artistas de una colaboración múltiple sin depender del orden', () => {
+    const result = evaluate({
+        targetArtist: 'Skrillex, Fatman Scoop, Kill The Noise, Michael Angelakos',
+        targetTitle: 'Recess (with Kill The Noise, Fatman Scoop, and Michael Angelakos)',
+        candidate: {
+            name: 'Recess (with Kill The Noise, Fatman Scoop, and Michael Angelakos)',
+            artist: 'Skrillex',
+            duration: 237
+        }
+    });
+    assert(result.passed, result.rejectReason);
+});
+
+test('Ignora el sufijo editorial de soundtrack y conserva los artistas', () => {
+    const identity = evaluatePrimaryIdentity(
+        { name: 'Turn Up The Sunshine', artist: 'Diana Ross, Tame Impala' },
+        'Diana Ross, Tame Impala',
+        "Turn Up The Sunshine - From 'Minions: The Rise of Gru' Soundtrack"
+    );
+    assert(identity.passed, JSON.stringify(identity));
+    assert(identity.titleScore === 1, 'el nombre editorial del soundtrack debe ignorarse');
+});
+
 test('Infiere artista del título si falta metadata', () => {
     const result = evaluate({
         targetArtist: 'Adele',
