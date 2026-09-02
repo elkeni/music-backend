@@ -97,7 +97,7 @@ const allowCors = (fn) => async (req, res) => {
  * @param {string} artist - Artista buscado
  * @param {string} track - Canción buscada
  */
-function selectBestCandidate(results, artist, track) {
+function selectBestCandidate(results, artist, track, options = {}) {
     let bestCandidate = null;
     let bestScore = -1;
 
@@ -105,7 +105,8 @@ function selectBestCandidate(results, artist, track) {
         targetTitle: track,
         targetArtist: artist,
         targetDuration: 0,
-        targetAlbum: ''
+        targetAlbum: '',
+        allowOfficialVersionFallback: options.allowOfficialVersionFallback === true
     };
 
     for (const item of results) {
@@ -227,7 +228,10 @@ async function runSaavnQueries(queries) {
 async function searchSaavnCandidate(artist, track, extraQueries = []) {
     const queries = [...new Set([...buildSearchQueries(artist, track), ...extraQueries])];
     const results = await runSaavnQueries(queries);
-    return selectBestCandidate(results, artist, track);
+    // Mantener la edición exacta como prioridad absoluta. Sólo cuando ninguna
+    // coincide, permitir el master oficial sin etiqueta de remaster.
+    return selectBestCandidate(results, artist, track)
+        || selectBestCandidate(results, artist, track, { allowOfficialVersionFallback: true });
 }
 
 /**

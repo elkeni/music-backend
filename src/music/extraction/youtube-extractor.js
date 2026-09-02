@@ -197,9 +197,10 @@ function normalizeVersionDetail(detail) {
  * la original. Remasters y radio edits quedan como fallbacks oficiales con
  * penalización, para mantener el recall cuando el catálogo no tiene el master.
  */
-export function evaluateVersionCompatibility(targetTitle, candidateTitle) {
+export function evaluateVersionCompatibility(targetTitle, candidateTitle, options = {}) {
     const target = detectVersion(targetTitle || '');
     const candidate = detectVersion(candidateTitle || '');
+    const allowOfficialFallback = options.allowOfficialFallback === true;
 
     if (NEVER_ACCEPT_VERSION_TYPES.has(candidate.type)) {
         return { passed: false, reason: `forbidden_version:${candidate.type}`, score: 0, exact: false, target, candidate };
@@ -207,6 +208,19 @@ export function evaluateVersionCompatibility(targetTitle, candidateTitle) {
 
     if (STRICT_VERSION_TYPES.has(target.type)) {
         if (candidate.type !== target.type) {
+            // Segunda pasada exclusiva para catálogos musicales confiables:
+            // algunos guardan el remaster en la edición/álbum, no en cada pista.
+            // Nunca se aplica a remix, live, acústico ni otras versiones.
+            if (allowOfficialFallback && target.type === 'remaster' && candidate.type === 'original') {
+                return {
+                    passed: true,
+                    reason: 'official_master_fallback',
+                    score: 0.68,
+                    exact: false,
+                    target,
+                    candidate
+                };
+            }
             return { passed: false, reason: `version_mismatch:wanted_${target.type}`, score: 0, exact: false, target, candidate };
         }
 
@@ -492,6 +506,7 @@ function normalizeArtistForMatching(value) {
  */
 function normalizeTitleForMatching(value) {
     const cleaned = cleanTitle(value || '')
+        .replace(/[\[(]?\s*single\s+version\s*[\])]?/gi, ' ')
         .replace(/\s*[-–—]?\s*(?:19|20)\d{2}\s+remaster(?:ed)?\s*$/gi, '')
         .replace(/\s*[-–—]?\s*remaster(?:ed)?\s+(?:19|20)\d{2}\s*$/gi, '')
         .replace(/[\[(]\s*(salsa|cumbia|bachata|merengue|reggaeton)?\s*(version|versi[oó]n)?\s*[\])]/gi, '')
@@ -863,7 +878,9 @@ export function evaluateCandidate(candidate, params) {
 
     // FASE 2: la versión solicitada es una condición independiente de identidad.
     const candidateTitle = candidate.name || candidate.title || '';
-    const versionCompatibility = evaluateVersionCompatibility(targetTitle, candidateTitle);
+    const versionCompatibility = evaluateVersionCompatibility(targetTitle, candidateTitle, {
+        allowOfficialFallback: params.allowOfficialVersionFallback === true
+    });
     const version = versionCompatibility.candidate;
 
     if (!versionCompatibility.passed) {

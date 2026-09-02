@@ -391,6 +391,43 @@ test('Normaliza guion y paréntesis equivalentes en un remaster solicitado', () 
     assert(result.details.identity.titleScore === 1, 'el año del remaster no debe quedar huérfano en identidad');
 });
 
+test('Usa master oficial como fallback controlado cuando el catálogo omite el remaster', () => {
+    const candidate = {
+        name: 'Fat Bottomed Girls',
+        artist: 'Queen',
+        album: 'Jazz (Deluxe Edition)',
+        duration: 255
+    };
+    const params = {
+        targetArtist: 'Queen',
+        targetTitle: 'Fat Bottomed Girls - Single Version / Remastered 2011',
+        targetDuration: 0,
+        targetAlbum: ''
+    };
+
+    const strict = evaluateCandidate(candidate, params);
+    assert(!strict.passed, 'la primera pasada debe seguir exigiendo el remaster exacto');
+
+    const fallback = evaluateCandidate(candidate, { ...params, allowOfficialVersionFallback: true });
+    assert(fallback.passed, fallback.rejectReason);
+    assert(fallback.scores.versionScore === 0.68, 'el fallback debe perder frente a una edición exacta');
+    assert(fallback.details.identity.titleScore === 1, 'Single Version debe separarse de la identidad base');
+});
+
+test('El fallback oficial nunca sustituye un remix solicitado', () => {
+    const result = evaluateCandidate(
+        { name: 'Levitating', artist: 'Dua Lipa', duration: 203 },
+        {
+            targetArtist: 'Dua Lipa',
+            targetTitle: 'Levitating Remix',
+            targetDuration: 0,
+            targetAlbum: '',
+            allowOfficialVersionFallback: true
+        }
+    );
+    assert(!result.passed, 'un master original no debe sustituir un remix');
+});
+
 test('Original prefiere master exacto sobre fallback oficial', () => {
     const original = evaluate({
         targetArtist: 'a-ha',
