@@ -13,6 +13,11 @@ const REDIS_DEADLINE_MS = 120;
 
 let redisModulePromise;
 
+function hasUsableRedisUrl() {
+    const value = String(process.env.REDIS_URL || '').trim().replace(/^["']|["']$/g, '');
+    return /^rediss?:\/\//i.test(value);
+}
+
 function normalizePart(value) {
     return String(value || '')
         .normalize('NFD')
@@ -39,7 +44,7 @@ function withDeadline(promise, timeoutMs = REDIS_DEADLINE_MS) {
 }
 
 async function getRedisModule() {
-    if (!process.env.REDIS_URL) return null;
+    if (!hasUsableRedisUrl()) return null;
     if (!redisModulePromise) {
         redisModulePromise = import('./redis-cache.js')
             .then(async module => await module.initRedis() ? module : null)

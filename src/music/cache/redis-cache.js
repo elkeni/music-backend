@@ -55,7 +55,12 @@ export async function initRedis() {
     }
 
     try {
-        const url = process.env.REDIS_URL || 'redis://localhost:6379';
+        const url = String(process.env.REDIS_URL || 'redis://localhost:6379')
+            .trim()
+            .replace(/^["']|["']$/g, '');
+        if (!/^rediss?:\/\//i.test(url)) {
+            throw new Error('REDIS_URL no contiene una URL redis:// o rediss:// válida');
+        }
 
         redisClient = createClient({
             url,
